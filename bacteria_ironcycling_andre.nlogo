@@ -51,6 +51,7 @@ to setup
   draw-walls  ;; create borders on all sites
 
   ;; create fe-containing patches randomly
+  ;; non-clustered fe-patches
   repeat ((count patches - count patches with [pcolor = black]) * (fe-patch-percentage / 100) * (1 - fe-clustering / 100)) [
     ifelse count patches with [(pcolor != black) and
                   (fe? != True) and
@@ -61,6 +62,7 @@ to setup
       assign-fe True
     ]
   ]
+  ;; clustered fe-patches
   repeat ((count patches - count patches with [pcolor = black]) * (fe-patch-percentage / 100) * (fe-clustering / 100)) [
     ifelse count patches with [ fe? = True ] > 0 [
       assign-fe True
