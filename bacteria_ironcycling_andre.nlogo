@@ -1,6 +1,5 @@
 ;; first bacteria model (universal model for further ChemBioSys projects)
 
-
 ;;;;;;;;;;;;;;;;;
 ;; inits of individuals and variables
 
@@ -15,12 +14,13 @@ turtles-own [
   ;substrate-essential  ;; substrate/nutrient that is primarily used/processed (e.g. an essential amino acid, or a main nutrient); taken from other breed
   ;substrate-dispensable  ;; substrate/nutrient that is produced or taken up from the environment; can be transfered to other breed
   split-ticks ;; tick of reproduction (split into two bacteria)
+  in-biofilm? ;; True if they are part of a biofilm, False if they are not
 ]
 
 patches-own [
   fe?   ;; Boolean, True if the field contains iron
   redox-balance   ;; negative values if there has been more reduction on this field (Fe2+), positive values if more oxidation (Fe3+)
-
+  cluster-identifier   ;; float identifier shared by iron containing patches of the same cluster, 1 if they don`t contain iron
 ]
 
 globals[
@@ -46,6 +46,7 @@ to setup
   ;; color patches
   ask patches [
     set pcolor white
+    set cluster-identifier 1
   ]
 
   draw-walls  ;; create borders on all sites
@@ -72,9 +73,12 @@ to setup
     ]
   ]
 
-
-
   update-color
+  while [ count patches with [(fe? = True) and (cluster-identifier = 1)] > 0]
+    [ask n-of 1 (patches with [(fe? = True) and (cluster-identifier = 1)])
+      [ set cluster-identifier random-float 1
+        group-clusters ]
+    ]
 
   set-default-shape turtles "checker piece"
 
@@ -84,6 +88,7 @@ to setup
   create-fe3reducer initial-number-fe3reducer [
     set color blue
     set size 1
+    set in-biofilm? False
     set energy 1 + random fe3reducer-max-initial-energy  ;; energy is not normal distributed because all individuals start at a different state, not all with full energy
     randomize
 
@@ -101,6 +106,7 @@ to setup
   create-fe2oxidizer initial-number-fe2oxidizer [
     set color red
     set size 1
+    set in-biofilm? False
     set energy 1 + random fe2oxidizer-max-initial-energy  ;; energy is not normal distributed because all individuals start at a different state, not all with full energy
     randomize
 
@@ -142,7 +148,9 @@ to go
   ]
 
   ask fe3reducer [ ;; move, die, reduce Fe3 to Fe2
-    move speed-fe3reducer
+    if (in-biofilm? != True)[
+      move speed-fe3reducer
+    ]
     death
 
     ;; check concentration of Fe3 on patch under agent
@@ -168,7 +176,9 @@ to go
   ]
 
   ask fe2oxidizer [ ;; move, die, oxidize Fe2 to Fe3
-    move speed-fe2oxidizer
+    if (in-biofilm? != True)[
+      move speed-fe2oxidizer
+    ]
     death
 
     ;; check concentration of Fe3 on patch under agent
@@ -190,6 +200,7 @@ to go
     ]
   ]
 
+  ;make-end-biofilms
   update-color
   update-reporter
 
@@ -269,6 +280,14 @@ to update-color
   ]
 end
 
+;;assigns same cluster-identifier to patches of the same cluster
+to group-clusters
+  ask neighbors4 with [(cluster-identifier = 1) and
+    (fe? = True)]
+  [ set cluster-identifier [cluster-identifier] of myself
+    group-clusters ]
+end
+
 ;;fe2 is oxidized through oxygen
 to fe2-oxidation-by-air
   ask patches with [fe? = True] [
@@ -320,7 +339,11 @@ to reproduce
 
 end
 
-
+;to make-end-biofilms
+;  let unique-clusters remove-duplicates [cluster-identifier] of patches with [cluster-identifier < 1]
+;  foreach unique-clusters [ x ->
+;    ask patches with
+;end
 
 ;;;;;;;;;;;;;;;;;
 ;; update plots
@@ -472,7 +495,7 @@ speed-fe3reducer
 speed-fe3reducer
 0
 1
-0.2
+0.5
 0.01
 1
 NIL
@@ -487,7 +510,7 @@ speed-fe2oxidizer
 speed-fe2oxidizer
 0
 1
-0.2
+0.5
 0.01
 1
 NIL
@@ -518,7 +541,7 @@ INPUTBOX
 182
 173
 initial-number-fe3reducer
-100.0
+200.0
 1
 0
 Number
@@ -529,7 +552,7 @@ INPUTBOX
 184
 444
 initial-number-fe2oxidizer
-100.0
+200.0
 1
 0
 Number
@@ -755,7 +778,7 @@ fe-clustering
 fe-clustering
 0
 100
-79.0
+92.0
 1
 1
 %
@@ -785,7 +808,7 @@ O2-saturation
 O2-saturation
 0
 100
-3.0
+20.0
 1
 1
 %
