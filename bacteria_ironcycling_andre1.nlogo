@@ -313,45 +313,28 @@ end
 
 to move-shewanella [ speed ]  ;; move turtles around randomly ;; let them stop if a wall is ahead
   ;; if patch-here has fe the turtle will reverse with probability 1, if not it will reverse with probability of 1/3
-  let clusterID-here [cluster-identifier] of patch-here
-  ifelse [fe? = True] of patch-here and (sum [redox-balance] of patches with [cluster-identifier = clusterID-here] / count patches with [cluster-identifier = clusterID-here]) > -4
+  ifelse ((any? ((patch-set patch-here neighbors) with [fe? = True])) and 
+          (mean [redox-balance] of ((patch-set patch-here neighbors) with [fe? = True]) >= (-0.5 / passivation-factor))
   [
     rt  random 360
-  ]
-  [
-    if random-float 1 <= (1 / 3) [rt random 360]
-  ]
-
-  ;; increase speed if there is fe3+ nearby, slow down if not
-  set cluster-identifier-list []
-  set cluster-redox-balance-list []
-  set neighborcluster-total-redox-balance -30
-  if count neighbors with [fe? = True] > 0 [
-    ; list of identifiers from each neighboring cluster
-    set cluster-identifier-list [cluster-identifier] of neighbors with [fe? = True]
-    ; list of redox-balances from each cluster (arithmetic mean of redox-balances of each patch in a cluster)
-    set cluster-redox-balance-list map [i -> mean [redox-balance] of patches with [cluster-identifier = i] ] cluster-identifier-list
-    ; calculate mean of all elements in redox-balance-list
-    set neighborcluster-total-redox-balance mean cluster-redox-balance-list
-  ]
-  ; if patch ahead is not black and there are fe neighbors with redox-balance mean > x increase speed (speed * 1)
-  ; slow down if there is not enough fe3+ nearby (speed * 0.5)
-  ifelse [pcolor] of patch-ahead 1 != black
-  [
-    ifelse neighborcluster-total-redox-balance > -4 ;; TODO adjust
+    ifelse [pcolor] of patch-ahead 1 != black
     [
       fd speed * 1
     ]
     [
-      fd speed * 0.5
+      move-shewanella speed
     ]
   ]
   [
-    move-shewanella speed
+    if random-float 1 <= (1 / 3) [rt random 360]
+    ifelse [pcolor] of patch-ahead 1 != black
+    [
+      fd speed * 0.5
+    ]
+    [
+      move-shewanella speed
+    ]
   ]
-  set neighborcluster-total-redox-balance []
-end
-
 
 to move-sideroxydans [ speed ]  ;; move turtles around randomly ;; let them stop if a wall is ahead
   rt random 360
