@@ -343,7 +343,7 @@ to move-sideroxydans [ speed ]  ;; move turtles around randomly ;; let them stop
     fd speed * 0.5 ;; TODO adjust
   ]
   [
-    move-shewanella speed
+    move-sideroxydans speed
   ]
 end
 
