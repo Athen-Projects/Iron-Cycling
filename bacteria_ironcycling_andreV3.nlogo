@@ -218,16 +218,9 @@ end
 ;; observer procedure that creates borders on all sites
 to draw-walls
   ;; don't let the window be bigger than the right chamber
-  ask patches with [(pxcor = min-pxcor) or
-                    ((pxcor < 0) and (abs pycor = max-pycor)) or
-                    (pxcor >= max-pxcor) or
-                    ((pxcor > 0) and (abs pycor >= max-pycor))]
+  ask patches with [(abs pxcor = max-pxcor) or
+    (abs pycor = max-pycor)]
     [ set pcolor black ]
-  ask patches with [pxcor = 0] [
-    ifelse abs pycor < 20  ;; if it is smaller than 20, there is a wall between right and left side (see Simple Kinetics 3)
-        [ ] ;set pcolor brown + 1]
-        [ set pcolor black ]
-  ]
 
   ;; if the window size changed
   ask turtles with [(pxcor = 0) and (pcolor = black)]
