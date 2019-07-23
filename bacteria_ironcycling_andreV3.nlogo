@@ -393,10 +393,13 @@ to make-end-biofilms
   let unique-clusters remove-duplicates [cluster-identifier] of patches with [cluster-identifier < 1]
   ;; adress every cluster.
   foreach unique-clusters [ x ->
+    ;; bacteria who still have to be adressed
     let bacteria-to-consider (list (fe3reducer-on (patches with [cluster-identifier = x])))
+    ;; bacteria in the biofilm
     if any? (turtle-set bacteria-to-consider) with [in-biofilm? = True] [
       ask (turtle-set bacteria-to-consider) with [in-biofilm? = True] [
         if (in-biofilm? = True) [
+          ;; is the passivation high enough for the biofilm to start resolving?
           if ((mean ([redox-balance] of (patch-set patch-here ([patch-here] of link-neighbors)))) * passivation-factor * -1 >= biofilm-dissolve-treshold) [
             ;; if the biofilm is already quite small, release all the bacteria.
             ifelse (count link-neighbors <= 3)[
@@ -409,6 +412,8 @@ to make-end-biofilms
               ]
             ]
             [
+              ;; if there are more bacteria in the biofilm, ask every single one to escape the biofilm with
+              ;; the probability biofilm-release-probability
               if (random-float 1 <= biofilm-release-probability) [
                 set in-biofilm? False
                 set bacteria-to-consider remove self bacteria-to-consider
@@ -419,10 +424,11 @@ to make-end-biofilms
         ]
       ]
     ]
-
+    ;; bacteria on the cluster, but not in a biofilm
     if any? ((turtle-set bacteria-to-consider) with [in-biofilm? = False]) [
       ask (turtle-set bacteria-to-consider) with [in-biofilm? = False] [
         if (in-biofilm? = False) [
+          ;; if there is already a biofilm close to the bacteria considered, recruit it with biofilm-recruitment-probability
           ifelse any? ((fe3reducer-on (patches with [cluster-identifier = x])) with [(in-biofilm? = True) and (distance myself <= 2)]) [
             let friend-who-invited-me min-one-of ((fe3reducer-on (patches with [cluster-identifier = x])) with [(in-biofilm? = True) and (distance myself <= 2)]) [distance myself]
             if (random-float 1 <= biofilm-recruitment-probability) [
@@ -433,6 +439,7 @@ to make-end-biofilms
               ]
           ]
           [
+            ;; if enough unbound bacteria are close, the cluster is big enough and the passivation is not too high, found a new biofilm
             if ((count ((turtle-set bacteria-to-consider) with [(distance myself <= 2) and (in-biofilm? = False)]) >= 3) and
               (count (patch-set patch-here (neighbors with [fe? = True])) >= 4) and
               (mean ([redox-balance] of (patch-set patch-here (neighbors with [fe? = True]))) * passivation-factor * -1 <= biofilm-start-treshold)) [
@@ -452,54 +459,6 @@ to make-end-biofilms
     ]
   ]
 end
-
-;  ;; adress every cluster.
-;  foreach unique-clusters [ x ->
-;    ;; There is no biofilm on this cluster yet.
-;    ifelse (not (any? (fe3reducer-on (patches with [cluster-identifier = x])) with [in-biofilm? = True]))[
-;      ;; check if the cluster is big enough, there are enough bacteria on the patch and suffers not too much passivation.
-;      if ((count patches with [cluster-identifier = x] >= 4) and
-;        (count fe3reducer-on patches with [cluster-identifier = x] >= 4) and
-;        ((mean [redox-balance] of patches with [cluster-identifier = x]) * passivation-factor * -1 <= biofilm-start-treshold)) [
-;        ask fe3reducer-on patches with [cluster-identifier = x] [
-;          set in-biofilm? True
-;          let patches-of-cluster patches with [cluster-identifier = x]
-;          move-to (max-one-of (patches-of-cluster with-min [count fe3reducer-here]) [count neighbors with [any? fe3reducer-here with [in-biofilm? = True]]])
-;        ]
-;      ]
-;    ]
-;    ;; there is already a biofilm on the cluster.
-;    [
-;      ;; if the passivation is too high, resolve the biofilm stepwise.
-;      ifelse ((mean [redox-balance] of patches with [cluster-identifier = x]) * passivation-factor * -1 >= biofilm-dissolve-treshold) [
-;        ;; if the biofilm is already quite small, release all the bacteria.
-;        ifelse (count fe3reducer-on patches with [cluster-identifier = x] <= 4)[
-;          ask fe3reducer-on patches with [cluster-identifier = x] [
-;            set in-biofilm? False
-;          ]
-;        ]
-;        ;; release only some of the bacteria
-;        [
-;          ask fe3reducer-on patches with [cluster-identifier = x] [
-;            if (random-float 1 <= biofilm-release-probability) [
-;              set in-biofilm? False
-;            ]
-;          ]
-;        ]
-;      ]
-;      ;; if the passivation is still quite low, allow recruitment of new bacteria
-;      [
-;        ask (fe3reducer-on (patches with [cluster-identifier = x])) with [in-biofilm? = False][
-;          if (random-float 1 <= biofilm-recruitment-probability)[
-;            set in-biofilm? True
-;            let patches-of-cluster patches with [cluster-identifier = x]
-;            move-to (max-one-of (patches-of-cluster with-min [count fe3reducer-here]) [count neighbors with [any? fe3reducer-here with [in-biofilm? = True]]])
-;          ]
-;        ]
-;      ]
-;    ]
-;  ]
-;end
 
 ;;;;;;;;;;;;;;;;;
 ;; update plots
