@@ -16,6 +16,7 @@ turtles-own [
   ;substrate-dispensable  ;; substrate/nutrient that is produced or taken up from the environment; can be transfered to other breed
   split-ticks ;; tick of reproduction (split into two bacteria)
   in-biofilm? ;; True if they are part of a biofilm, False if they are not
+  biofilm-cooldown ;; How long are bacteria unable to get back into a biofilm after they left
 ]
 
 patches-own [
@@ -92,6 +93,7 @@ to setup
     set color blue
     set size 1
     set in-biofilm? False
+    set biofilm-cooldown 0
     set energy 1 + random fe3reducer-max-initial-energy  ;; energy is not normal distributed because all individuals start at a different state, not all with full energy
     randomize
 
@@ -110,6 +112,7 @@ to setup
     set color red
     set size 1
     set in-biofilm? False
+    set biofilm-cooldown 0
     set energy 1 + random fe2oxidizer-max-initial-energy  ;; energy is not normal distributed because all individuals start at a different state, not all with full energy
     randomize
 
@@ -387,7 +390,7 @@ to make-end-biofilms
   ;; adress every cluster.
   foreach unique-clusters [ x ->
     ;; bacteria who still have to be adressed
-    let bacteria-to-consider (list (fe3reducer-on (patches with [cluster-identifier = x])))
+    let bacteria-to-consider (list ((fe3reducer-on (patches with [cluster-identifier = x])) with [biofilm-cooldown < ticks]))
     ;; bacteria in the biofilm
     if any? (turtle-set bacteria-to-consider) with [in-biofilm? = True] [
       ask (turtle-set bacteria-to-consider) with [in-biofilm? = True] [
@@ -397,9 +400,11 @@ to make-end-biofilms
             ;; if the biofilm is already quite small, release all the bacteria.
             ifelse (count link-neighbors <= 3)[
               set in-biofilm? False
+              set biofilm-cooldown (ticks + 30)
               set bacteria-to-consider remove self bacteria-to-consider
               ask link-neighbors [
                 set in-biofilm? False
+                set biofilm-cooldown (ticks + 30)
                 set bacteria-to-consider remove self bacteria-to-consider
                 ask my-links [die]
               ]
@@ -409,6 +414,7 @@ to make-end-biofilms
               ;; the probability biofilm-release-probability
               if (random-float 1 <= biofilm-release-probability) [
                 set in-biofilm? False
+                set biofilm-cooldown (ticks + 30)
                 set bacteria-to-consider remove self bacteria-to-consider
                 ask my-links [die]
               ]
