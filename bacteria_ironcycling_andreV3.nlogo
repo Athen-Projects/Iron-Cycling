@@ -196,11 +196,11 @@ to go
         ;; Sideroxydans uses O2 as energy source
         ;; only between 18-20% oxidizes Fe2 to Fe3
         ask patch-here [
-          set redox-balance redox-balance + 1
+          set global-oxidation-count global-oxidation-count + (min (list (redox-balance + 10) 0))
+          set redox-balance (min (list (redox-balance + 10) 0))
         ]
         set energy energy + 5
         if show-labels? [ set label "O" ]
-        set global-oxidation-count global-oxidation-count + 1
       ]
     ]
     [
