@@ -166,8 +166,10 @@ to go
     ifelse O2-saturation < 5 [
       if [ fe? = True ] of patch-here [
         ;; Shewanella uses O2 as an electron sink
-        ;; only when O2 is missing, it reduces Fe3 to Fe2 to gain energy
-        if (random-float 1) > (-1 * [redox-balance] of patch-here * passivation-factor) [
+        ;; Shewanella reduces Fe3 to Fe2 to gain energy only when O2 is missing
+        ;; according to https://www2.chemistry.msu.edu/courses/cem837/Corrosion_Lecture%204-passivity.pdf
+        ;; passivation follows the logarithmic growth law
+        if (random-float 1) > ((log ([-1 * redox-balance + 1] of patch-here) 10) * passivation-factor) [
         ;; only when there is no Fe2+ on the surface, Fe3+ can be reduced to Fe2+
           ask patch-here [
             set redox-balance redox-balance - 1
@@ -285,8 +287,7 @@ to update-color
      [set pcolor red]  ;; neutral balance
      [
       ifelse redox-balance < 0
-       [set pcolor blue + 2 + (redox-balance * passivation-factor)]  ;; more Fe2+ produced recently
-       [set pcolor red + 2 - (redox-balance * passivation-factor)]  ;; more Fe3+ produced recently
+       [set pcolor blue + 2 - ((log (-1 * redox-balance + 1) 10) * passivation-factor) * 2]  ;; more Fe2+ produced recently
      ]
   ]
 end
