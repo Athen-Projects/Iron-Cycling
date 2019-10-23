@@ -1,6 +1,9 @@
-extensions [csv]
+extensions [
+  csv
+  py
+]
 
-breed [ bacter bacteria]
+breed [ bacter bacteria ]
 
 patches-own [
   fe?   ;; Boolean, True if the field contains iron
@@ -15,8 +18,10 @@ globals [
   oxygen-csv ;; reads input file
   oxy-switch-ticks ;; ticks at which the oxygen concentration changes
   oxy-switch-values ;; new values for the oxygen concentration
-
   oxygen-list ;; list of oxygen-values for each coordinate (updated each tick)
+
+  selected-ticks ;;for bacteria-per-layer-plot, contains ticks at which plot should draw a line
+  bacteria-per-layer-plt ;;list of bacteria-per-layer for each selected tick
 ]
 
 to setup
@@ -31,7 +36,20 @@ to setup
   set oxy-switch-values sublist oxygen-csv 1 (length oxygen-csv)
   switch-oxygen3D
   set oxygen-list []
-  set max-ticks 3700
+  set max-ticks 12
+  set bacteria-per-layer-plt []
+
+  ;; initialize an array of numbers in a certain interval (e.g. 100 - 200 - 300...)
+  ;; numbers must be <= max ticks
+  let i 0
+  let j 0
+  let tick-distance 2
+  set selected-ticks []
+  while [j <= max-ticks] [
+    set selected-ticks lput (i * tick-distance) selected-ticks
+    set i (i + 1)
+    set j (j + tick-distance)
+  ]
 
   ask patches [
     set fe?-bin 0
@@ -39,10 +57,15 @@ to setup
 end
 
 to go
+  if ( empty? selected-ticks  or ticks > max ( selected-ticks ) ) [ plot-bacteria-per-layer ]
   if not any? turtles [ stop ]
   if ticks = max-ticks + 1 [ stop ]
+
   switch-oxygen3D
   create-oxygen-list
+
+  update-bacteria-per-layer
+
   ;; actions of bacteria (for this easier model it is just movement)
   ask bacter [
     move speed-bacter
@@ -121,6 +144,78 @@ end
 
 
 ;;;;TURTLE PROCEDURES;;;;
+
+;; plots number of bacteria per z-layer (ticks in certain intervals from selected-ticks)
+to update-bacteria-per-layer
+  if member? ticks selected-ticks [
+;    set selected-ticks but-first selected-ticks
+    let i 16
+    let bacteria-per-layer []
+    while [ i > -17 ]
+    [
+      set bacteria-per-layer lput ( count ( turtles with [ ( round zcor ) = i ] ) ) bacteria-per-layer
+      set i ( i - 1 )
+    ]
+
+    set bacteria-per-layer-plt lput bacteria-per-layer bacteria-per-layer-plt
+
+  ]
+;;TODO
+;;color the lines according to the ticks
+end
+
+to plot-bacteria-per-layer
+  ;; plot bacteria per layer
+  ;;set variables from netlogo
+  py:setup py:python3
+  py:set "bacteriaPerLayer" bacteria-per-layer-plt ;;x axis
+  py:set "zcoordinates" ( range -16 17 ) ;; y axis
+  py:set "subplotNumber" length bacteria-per-layer-plt ;;# of subplots
+  py:set "selectedTicks" selected-ticks
+  py:set "nrows" 0
+  py:set "ncols" 0
+ (py:run
+    ;;import packages and declare locals
+    "import math"
+    "import matplotlib"
+    "import numpy as np"
+    "import matplotlib.pyplot as plt"
+    "k = 3"
+    "l = 0"
+    ;;compute number of rows and columns
+    "def subplot_dimensions(subplotNumber):"
+    "    if subplotNumber < 4:"
+    "        return subplotNumber, 1"
+    "    elif subplotNumber < 11:"
+    "        return math.ceil(subplotNumber/2), 2"
+    "    else:"
+    "        return math.ceil(subplotNumber/3), 3"
+    "ncols, nrows = subplot_dimensions(subplotNumber)"
+    ;;plots (create all subplots and delete empty ones)
+    "fig, axs = plt.subplots(nrows, ncols, squeeze=True)"
+    "for i in range (0, nrows):"
+    "    for j in range(0, ncols):"
+    "        if l < len(bacteriaPerLayer):"
+    "            axs[i, j].plot(bacteriaPerLayer[l], zcoordinates, color=(k/255, k/255, k/255))"
+    "            axs[i, j].set_title('tick '+ str(selectedTicks[l]))"
+    "            k += 20"
+    "        else:"
+    "            fig.delaxes(axs[i, j])"
+    "        l += 1"
+    ;;set names of x and y axes, just label the outer axes
+    "for ax in fig.get_axes():"
+    "    ax.set_xticks(np.arange(0, 21, step=4))"
+    "    ax.set_yticks(np.arange(-15, 16, step=5))"
+    "    ax.label_outer()"
+    "axs[0, 0].set(ylabel='z-layer')"
+    "axs[nrows - 1, 0].set(xlabel='number of bacteria')"
+    "plt.show()"
+
+    ;;TODO
+    ;;plots eher horizontal oder vertikal gestreckt
+    ;;subplot_dimensions anpassen
+  )
+end
 
 ;; setup the bacteria at the beginning of the model
 to make-bacteria
@@ -275,7 +370,7 @@ INPUTBOX
 230
 235
 initial-number-bacter
-20.0
+200.0
 1
 0
 Number
@@ -673,6 +768,29 @@ NetLogo 3D 6.0.4
 need-to-manually-make-preview-for-this-model
 @#$#@#$#@
 @#$#@#$#@
+<experiments>
+  <experiment name="experiment" repetitions="1" runMetricsEveryStep="true">
+    <setup>setup</setup>
+    <go>go</go>
+    <timeLimit steps="5"/>
+    <metric>bacteria-per-layer</metric>
+    <enumeratedValueSet variable="fe-patch-percentage">
+      <value value="3"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="show-labels?">
+      <value value="true"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="fe-clustering">
+      <value value="94"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="speed-bacter">
+      <value value="0.5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="initial-number-bacter">
+      <value value="20"/>
+    </enumeratedValueSet>
+  </experiment>
+</experiments>
 @#$#@#$#@
 @#$#@#$#@
 default
