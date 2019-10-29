@@ -149,9 +149,9 @@ end
 to update-bacteria-per-layer
   if member? ticks selected-ticks [
 ;    set selected-ticks but-first selected-ticks
-    let i 16
+    let i max-pzcor
     let bacteria-per-layer []
-    while [ i > -17 ]
+    while [ i > ( min-pzcor - 1 ) ]
     [
       set bacteria-per-layer lput ( count ( turtles with [ ( round zcor ) = i ] ) ) bacteria-per-layer
       set i ( i - 1 )
@@ -169,7 +169,7 @@ to plot-bacteria-per-layer
   ;;set variables from netlogo
   py:setup py:python3
   py:set "bacteriaPerLayer" bacteria-per-layer-plt ;;x axis
-  py:set "zcoordinates" ( range -16 17 ) ;; y axis
+  py:set "zcoordinates" ( range min-pzcor ( max-pzcor + 1 ) ) ;; y axis
   py:set "subplotNumber" length bacteria-per-layer-plt ;;# of subplots
   py:set "selectedTicks" selected-ticks
   py:set "nrows" 0
