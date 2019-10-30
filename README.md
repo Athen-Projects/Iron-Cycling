@@ -10,3 +10,6 @@ movement shewanella chemotaxis
 
 Version 3
 oxygen saturation values from csv
+
+Version 3 3D 
+plots bacteria and redox balance per layer for selected ticks
