@@ -8,6 +8,13 @@ Version 2
 biofilms
 movement shewanella chemotaxis
 
+Version 2 3D
+e shuttles
+
+Version 2.2 3D
+first steps on identifying pockets
+more specifically: find gaps
+
 Version 3
 oxygen saturation values from csv
 
