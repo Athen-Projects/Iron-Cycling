@@ -70,7 +70,7 @@ to setup
   let tick-distance max-ticks / 8 ;;needs to be updated according to plot preferences
   set selected-ticks []
   while [j <= max-ticks] [
-    set selected-ticks lput (i * tick-distance) selected-ticks
+    set selected-ticks lput (round (i * tick-distance)) selected-ticks
     set i (i + 1)
     set j (j + tick-distance)
   ]
@@ -284,6 +284,7 @@ end
 
 to update-layer-plots
   if member? ticks selected-ticks [
+    show ticks
     let i max-pzcor
     let bacteria-per-layer []
     let redox-balance-per-layer []
@@ -296,7 +297,7 @@ to update-layer-plots
       set help2 count patches with [ ( round pzcor ) = i and ( count neighbors with [ fe? = false ] > 0 ) ]
 
       set redox-balance-per-layer lput ( help1 / help2 ) redox-balance-per-layer
-      set bacteria-per-layer lput ( count ( turtles with [ ( round zcor ) = i ] ) ) bacteria-per-layer
+      set bacteria-per-layer lput ( count ( fe3reducer with [ ( round zcor ) = i ] ) + count ( fe2oxidizer with [ ( round zcor ) = i ] ) ) bacteria-per-layer
       set i ( i - 1 )
     ]
 
@@ -426,7 +427,7 @@ to manage-shuttles
   ]
 end
 
-to move [ speed ]  ;; move turtles around randomly ;; let them stop if a wall is ahead
+to move [ speed ]  ;; move turtles around randomly. Let them stop if a wall is ahead
   set roll random 360
   tilt-up random 360
   ifelse (([any? (neighbors6 with [fe? != True])] of patch-ahead speed = True) and
