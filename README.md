@@ -15,8 +15,10 @@ Version 2 3D
 e shuttles
 
 Version 2.2 3D
-first steps on identifying pockets
-more specifically: find gaps
+identify fe pockets
 
 Version 3 3D 
 plots bacteria and redox balance per layer for selected ticks
+
+Version 4 3D 
+all of the above and additional plots
