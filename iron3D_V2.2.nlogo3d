@@ -56,18 +56,18 @@ to setup
   update-reporter
 
   ;;read input file as oxygen-csv, shift ticks into one variable and values into another
-  set oxygen-csv (csv:from-file "/home/natalie/netlogo_programs/Iron-Cycling-master/OxygenValues3D.csv" ";")
+  set oxygen-csv (csv:from-file "OxygenValues3D.csv" ";")
   set oxy-switch-ticks item 0 (sublist oxygen-csv 0 1)
   set oxy-switch-values sublist oxygen-csv 1 (length oxygen-csv)
   switch-oxygen3D
   set degradation-prob 0.02
-  set max-ticks 12 ;;3700
+  set max-ticks 3900 ;;3900
   set bacteria-per-layer-plt []
   set redox-balance-per-layer-plt []
 
   let i 0
   let j 0
-  let tick-distance 2 ;;needs to be updated according to plot preferences
+  let tick-distance max-ticks / 8 ;;needs to be updated according to plot preferences
   set selected-ticks []
   while [j <= max-ticks] [
     set selected-ticks lput (i * tick-distance) selected-ticks
@@ -94,7 +94,7 @@ to go
     if (in-biofilm? != True) [
       move-shewanella speed-fe3reducer
     ]
-    ifelse ([p-oxygen] of patch-here < 5) [
+    ifelse ([p-oxygen] of patch-here <= 1) [
       reduce-iron
     ]
     [
@@ -108,7 +108,7 @@ to go
     if (in-biofilm? != True) [
       move speed-fe2oxidizer
     ]
-    ifelse ([p-oxygen] of patch-here > 17) and ([p-oxygen] of patch-here < 21) [
+    ifelse ([p-oxygen] of patch-here >= 1) and ([p-oxygen] of patch-here <= 3) [
       oxidize-iron
     ]
     [
@@ -202,9 +202,9 @@ end
 
 ;;fe2 is oxidized through oxygen
 to fe2-oxidation-by-air
-  ask patches with [(fe? = True) and (redox-balance < 0) and (p-oxygen > 10)] [
+  ask patches with [(fe? = True) and (redox-balance < 0) and (p-oxygen >= 1)] [
     ;;minimum amount of iron oxidized. E. g. oxidized-iron-int = 4 for redox-balance * chemical-oxidation-factor = -4.5
-    let oxidized-iron-int -1 * (ceiling (redox-balance * chemical-oxidation-factor))
+    let oxidized-iron-int -1 * (ceiling (redox-balance * chemical-oxidation-factor * p-oxygen / 21))
     ;;stochastically oxidize the remaining broken iron. E. g. prob-remaining = 0.5 for redox-balance * chemical-oxidation-factor = -4.5
     let prob-remaining-iron (ceiling (redox-balance * chemical-oxidation-factor)) - (redox-balance * chemical-oxidation-factor)
     set redox-balance redox-balance + oxidized-iron-int
@@ -412,7 +412,7 @@ to manage-shuttles
   ]
 
   ;; produce e-shuttle
-  ask (fe3reducer with [(in-biofilm? = False) and (([fe?] of patch-here) != True)]) [
+  ask (fe3reducer with [(in-biofilm? = False) and (([fe?] of patch-here) != True) and (count (e-shuttle in-radius 2) <= 3)]) [
     if energy > 3 [
       hatch-e-shuttle 1 [
         set shape "dot"
@@ -522,10 +522,15 @@ to oxidize-iron
     ;; Sideroxydans uses O2 as energy source
     ;; only between 18-20% oxidizes Fe2 to Fe3
     ask patch-here [
-      set global-oxidation-count global-oxidation-count + (min (list (redox-balance + 10) 0))
+      ifelse (redox-balance > -10) [
+        set global-oxidation-count global-oxidation-count - redox-balance
+      ]
+      [
+        set global-oxidation-count global-oxidation-count + 10
+      ]
       set redox-balance (min (list (redox-balance + 10) 0))
     ]
-    set energy energy + 5
+    set energy energy + 50
     if show-labels? [ set label "O" ]
   ]
 end
@@ -826,7 +831,7 @@ chemical-oxidation-factor
 chemical-oxidation-factor
 0
 1
-0.28
+0.02
 0.01
 1
 NIL
@@ -852,7 +857,7 @@ speed-fe2oxidizer
 speed-fe2oxidizer
 0
 1
-0.19
+1.0
 0.01
 1
 NIL
@@ -867,7 +872,7 @@ speed-fe3reducer
 speed-fe3reducer
 0
 1
-0.11
+1.0
 0.01
 1
 NIL
@@ -981,41 +986,165 @@ PENS
 "default" 1.0 0 -16777216 true "" "foreach (range -16 17) [ x -> plotxy (mean ([p-oxygen] of (patches with [pzcor = x]))) x]"
 
 @#$#@#$#@
-## WHAT IS IT?
+# Overview
+## Purpose
 
-(a general understanding of what the model is trying to show or explain)
+The purpose of the model is the description of the dynamics in iron reduction (by Shewanella) and iron oxidation (by Sideroxydans). After validation the tripartite interaction with another species (Pseudomonas) ought to be modelled.
 
-## HOW IT WORKS
+## Entities, state variables, and scales
 
-(what rules the agents use to create the overall behavior of the model)
+The 3D-environment represents the peat habitat of the bacteria and contains iron clusters.
 
-## HOW TO USE IT
+So far the model includes three types of agents: two of them are the bacteria fe3reducers (Shewanella) and fe2oxidizers (Sideroxydans), and the third represents electron shuttles secreted by Shewanella.
 
-(how to use the model, including a description of each of the items in the Interface tab)
 
-## THINGS TO NOTICE
+Global variables:
+	**max-ticks**: tick count at which the model ends.
+	**global-mean-energy-fe3reducer**: the mean energy level of the fe3 reducing				bacteria.
+ 	**global-mean-energy-fe2oxidizer**: the mean energy level of the fe2 oxidizing 				bacteria.
+ 	**global-reduction-count**: counts how often iron gets reduced.
+ 	**global-oxidation-count**: counts how often iron gets oxidized.
+ 	**global-redox-count**: the difference between global-reduction-count and				global-oxidation-count.
+	**oxygen-csv**: stores the information of the csv-file containing the changing 				oxygen profile (experimental measures for oxygen-profiles are retrieved				from **[1]**)
+	**oxy-switch-ticks**: ticks at which the oxygen profile changes.
+	**oxy-switch-values**: values the oxygen profile gets adjusted to.
 
-(suggested things for the user to notice while running the model)
 
-## THINGS TO TRY
+Patch variables:
+	**fe?**: differentiates iron mineral containing patches [fe? = True] from those				containing no iron minerals [fe? = False].
+	**redox-balance**: Indicator for the amount of Fe2+ on the patch. 0 if no fe2+				present, -1 for every model unit (has yet to be defined) of fe2+.
+	**cluster-identifier**: iron mineral containing patches adhering together have				the same float identifier.
+	**p-oxygen**: concentration of oxygen in atm.
 
-(suggested things for the user to try to do (move sliders, switches, etc.) with the model)
 
-## EXTENDING THE MODEL
+Agent variables:
+	**energy**: measure of fitness (specify)
+	**in-biofilm?**: True if the agent is in a biofilm, False else.
+	**biofilm-cooldown**: time the bacteria is unable to re-enter a biofilm after				leaving.
 
-(suggested things to add or change in the Code tab to make the model more complicated, detailed, accurate, etc.)
 
-## NETLOGO FEATURES
+## Process Overview and Scheduling
 
-(interesting or unusual features of NetLogo that the model uses, particularly in the Code tab; or where workarounds were needed for missing features)
+Stop the model if one of those conditions is satisfied:
+	1. there are no agents left
+	2. the runtime (ticks) exceeds the time specified in max-ticks
 
-## RELATED MODELS
+Changes the oxygen-levels if specified in your csv file
 
-(models in the NetLogo Models Library and elsewhere which are of related interest)
+Abiotic iron oxidation
 
-## CREDITS AND REFERENCES
+Actions of the e-shuttles:
+	1. Live or die
+	2. Movement
+	3. Electron transfer to Fe3+
+	4. Refill electron by fe3reducer if close
+	5. Production
 
-(a reference to the model's URL on the web if it has one, as well as any other necessary credits, citations, and links)
+Actions of Shewanella:
+	1. Movement
+	2. Iron reduction
+
+Actions of Sideroxydans:
+	1. Movement
+	2. Iron oxidation
+
+Update the color of the iron patches
+
+Update the reporters.
+
+# Design concepts
+
+## Basic principles
+
+The basic principle adressed by this model is the influence of oxygen on the reduction/oxidation rates and survival of the different bacteria. As together the respiration processes of the bacteria form a cycle, i.e. they provide each other with the substrates for their respiration, they heavily influence each others lifestyle. By simulating different strategies (for example chemotaxis, adherence to particles) and varying oxygen profiles we want to answer two key questions.
+
+1. What kind of iron aquisition strategies are optimal for efficient respiration?
+2. What kind of oxygen profiles result in cycles with the highest throughput of iron?
+
+## Emergence
+
+First and for validation purposes we want the following features to emerge from our model:
+1. a realistic vertical distribution of the modelled bacteria **[2]**.
+2. Fe2+ concentrations for different oxic/anoxic periods matching those of **[3]**.
+
+## Adaptation
+
+Bacteria adapt to the redox state of the iron mineral surface by changing their speed and frequency of turns. They also base their decision of biofilm formation and release on the redox state of the particle.
+
+## Objectives
+
+-
+
+## Learning Prediction
+
+-
+
+## Sensing
+
+Bacteria are assumed to know the local oxygen concentration (at the patch they inhabit) and the redox state of the surrounding environment (up to a one patch distance).
+
+## Interaction
+
+The bacteria interact indirectly with each other through the production/consumption of Fe2+ and Fe3+. Later we also want to include bacteria influencing local oxygen concentrations. fe3reducers (Shewanella) interact with e-shuttles by producing and transferring electrons to them. They are able to re-reduce the e-shuttles once they are close to each other.
+
+## Stochasticity
+
+The bacteria are randomly positioned in the environment at the beginning of the model. If bacteria and e-shuttles are able to reduce/oxidize iron once they are close is also determined stochastically. The passivation effect implies that it gets more and more unlikely for a reduction event to be successful.
+
+## Collectives 
+
+It is planned to implement biofilms although the different time scales (e.g. compared with chemotaxis) poses still an issue to discuss. Bacteria in biofilms are unable to move and are only able to reduce the patches the biofilm adheres to.
+
+## Observation
+
+We aim to access the validity of the model by comparing the emerging distribution of bacteria and the oscillations of Fe2+ with experimental data. We do the visualization with python as it offers more costumization opportunities compared to the internal visualization options of netlogo itself.
+
+# Details
+
+## Initialization
+
+The model starts by distributing iron containing patches over the environment randomly. The parameter fe-patch-percentage sets the percentage of patches containing iron. fe-clustering gives the percentage of iron containing patches which are integrated into a cluster (at least two iron containing patches connected to each other (6-neighboorhood). passivation-factor sets the strength of the passivation effect (how much harder it gets to reduce Fe3+ once it is covered by a layer of Fe2+) and is constant during a run.
+
+Next the bacteria are created. They are randomly placed in the environment but can not be placed in an iron containing patch. The initial number of bacteria is determined by initial-number-fe3reducer and intial-number-fe2oxidizer, respectively. Their base speed is determined by speed-fe3reducer and speed-fe2oxidizer, respectively.
+
+chemical-oxidation-factor affects the speed of the abiotic oxidation of Fe2+ and degradation-probability sets the chance of an electron shuttle to disappear per tick. Both a constant during a run. max-ticks defines the maximum duration of the model.
+
+## Input data
+
+The model reads input data about the dynamics of vertical oxygen distribution from a csv file, although there are plans to implement oxygen diffusion and from there on only depend on starting values for oxygen concentrations.
+
+## Submodels
+
+### electron-shuttle management
+
+With a certain degradation probability every electron shuttle can vanish each turn. A realistic value for the degradation probability has yet to be defined.
+
+If a reduced electron-shuttle (blue) is at a patch containing iron it may transfer its electron to the iron mineral and hence reducing it. The probability for successful reduction falls in a logarithmic fashion with Fe2+ adhering to the surface of the mineral.
+
+Upon close contact with Shewanella the oxidized electron-shuttle (red) gets re-reduced.
+
+All Shewanella/fe3reducers which are not in a biofilm, do not stand on an iron patch, and have sufficient energy (energy > 3) are asked to produce a reduced electron-shuttle for the cost of 3 energy if there are equal or less than 3 electron shuttles in radius 2. Realistic conditions for electron shuttle production are still to be determined.
+
+### iron reduction by bacteria
+
+all the fe3reducers who stand on an iron patch with an oxygen concentration equal or below 1 % (0.01 atm) have the chance to reduce iron on the spot. The probability for successful reduction falls in a logarithmic fashion with Fe2+ adhering to the surface of the mineral. Upon reduction they gain 1 energy
+
+### iron oxidation by fe2oxidizers
+
+all the fe2oxidizers who stand on an iron patch with an oxygen concentration between 1 % and 3 % oxidize iron on the spot. They oxidize at most 10 units of Fe2+. If there is less Fe2+ on the spot, they oxidize everything. Upon oxidation they gain 50 energy **(This has to be adjusted.)**.
+
+### iron oxidation by air
+
+above a concentration of 1 % iron is oxidized abiotically by oxygen. Oxygen oxidizes **redox-balance * chemical-oxidation-factor * p-oxygen / 21** iron units. 
+
+## References
+
+**[1]** Druschel, G. K., et al. (2008). "Low-oxygen and chemical kinetic constraints on the geochemical niche of neutrophilic iron(II) oxidizing microorganisms." Geochimica et Cosmochimica Acta 72(14): 3358-3370.
+
+**[2]**
+
+**[3]** Barcellos, D., et al. (2018). "Faster redox fluctuations can lead to higher iron reduction rates in humid forest soils." Biogeochemistry 137(3): 367-378.
+	
 @#$#@#$#@
 default
 true
