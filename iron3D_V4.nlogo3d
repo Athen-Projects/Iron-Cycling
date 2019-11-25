@@ -42,6 +42,9 @@ globals [
 
   selected-ticks ;;for bacteria-per-layer-plot, contains ticks at which plot should draw a line
   bacteria-per-layer-plt ;;list of bacteria-per-layer for each selected tick
+  fe3reducers-per-layer-plt
+  fe2oxidizers-per-layer-plt
+  eshuttles-per-layer-plt
   redox-balance-per-layer-plt
 
   gap-dist ;; distance a gap can have to an fe patch
@@ -340,6 +343,9 @@ to update-layer-plots
     let i max-pzcor
     let bacteria-per-layer []
     let redox-balance-per-layer []
+    let fe3reducers-per-layer []
+    let fe2oxidizers-per-layer []
+    let eshuttles-per-layer []
 
     let help1 0
     let help2 0
@@ -350,11 +356,17 @@ to update-layer-plots
 
       set redox-balance-per-layer lput ( help1 / help2 ) redox-balance-per-layer
       set bacteria-per-layer lput ( count ( fe3reducer with [ ( round zcor ) = i ] ) + count ( fe2oxidizer with [ ( round zcor ) = i ] ) ) bacteria-per-layer
+      set fe3reducers-per-layer lput count ( fe3reducer with [ (round zcor) = i ]) fe3reducers-per-layer
+      set fe2oxidizers-per-layer lput count ( fe2oxidizer with [ (round zcor) = i ]) fe2oxidizers-per-layer
+      set eshuttles-per-layer lput count ( e-shuttle with [ (round zcor) = i ]) eshuttles-per-layer
       set i ( i - 1 )
     ]
 
     set bacteria-per-layer-plt lput bacteria-per-layer bacteria-per-layer-plt
     set redox-balance-per-layer-plt lput redox-balance-per-layer redox-balance-per-layer-plt
+    set fe3reducers-per-layer-plt lput fe3reducers-per-layer fe3reducers-per-layer-plt
+    set fe2oxidizers-per-layer-plt lput fe2oxidizers-per-layer fe2oxidizers-per-layer-plt
+    set eshuttles-per-layer-plt lput eshuttles-per-layer eshuttles-per-layer-plt
 
   ]
 end
@@ -365,6 +377,9 @@ to plot-bacteria-per-layer
   py:setup py:python3
   py:set "redoxBalancePerLayer" redox-balance-per-layer-plt ;;x axis
   py:set "bacteriaPerLayer" bacteria-per-layer-plt ;;x axis
+  py:set "fe3reducerPerLayer" fe3reducers-per-layer-plt
+  py:set "fe2oxidizerPerLayer" fe2oxidizers-per-layer-plt
+  py:set "eshuttlesPerLayer" eshuttles-per-layer-plt
   py:set "zcoordinates" ( range min-pzcor ( max-pzcor + 1 ) ) ;; y axis
   py:set "subplotNumber" length bacteria-per-layer-plt ;;# of subplots; goes for both plot lists
   py:set "selectedTicks" selected-ticks
