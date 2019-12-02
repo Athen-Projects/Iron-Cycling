@@ -22,3 +22,6 @@ plots bacteria and redox balance per layer for selected ticks
 
 Version 4 3D 
 all of the above and additional plots
+
+Version 5 3D
+data extraction suitable for bokeh plots (saved as .csv file)
