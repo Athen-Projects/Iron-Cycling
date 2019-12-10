@@ -11,6 +11,7 @@ breed [ e-shuttle e-shuttles ]
 turtles-own [
   energy ;; fitness of each individual
   adhering? ;; True if they are adhering to the iron mineral surface, False if they are not
+  on-pit? ;; True if they are adhering to the iron mineral surface and have a pit underneath
   adhesion-cooldown ;; How long are bacteria unable to get back onto an iron mineral surface after they left
 ]
 
@@ -54,6 +55,8 @@ globals [
   gap-dist ;; distance a gap can have to an fe patch
   shuttle-transfer-count ;;counts number of electron transfers via e shuttles per tick
   fe3reducers-on-fe ;; number of fe3reducers on fe patches
+  contact-reduction-count ;;
+  reduction-ratio ;; (e shuttle reductions) / (total number of reductions)
 ]
 
 to setup
@@ -71,7 +74,7 @@ to setup
   set oxy-switch-values sublist oxygen-csv 1 (length oxygen-csv)
   switch-oxygen3D
   set degradation-prob 0.02
-  set max-ticks 200 ;;3900
+  set max-ticks 3900
   set redox-balance-per-layer-plt []
   set fe3reducers-per-layer-plt []
   set fe2oxidizers-per-layer-plt []
@@ -94,6 +97,9 @@ to go
   if not any? turtles [ stop ]
   if ticks = max-ticks + 1 [ stop ]
   set shuttle-transfer-count 0
+  set fe3reducers-on-fe 0
+  set reduction-ratio 0
+  set contact-reduction-count 0
   ;;set fe3reducers-on-fe 0
   switch-oxygen3D
   fe2-oxidation-by-air
@@ -111,7 +117,7 @@ to go
     if ( [ fe? = True ] of patch-here ) [
       set fe3reducers-on-fe fe3reducers-on-fe + 1
     ]
-    ifelse ([p-oxygen] of patch-here <= 1) [
+    ifelse (([p-oxygen] of patch-here <= 1) and (on-pit? = False)) [
       reduce-iron
     ]
     [
@@ -133,6 +139,11 @@ to go
       set energy energy + 1
     ]
   ]
+
+  ;;count ratio of fe3 reductions via e-shuttle and direct contact
+  ifelse ( shuttle-transfer-count > 0 or contact-reduction-count > 0)
+  [ set reduction-ratio shuttle-transfer-count / ( contact-reduction-count + shuttle-transfer-count ) ]
+  [ set reduction-ratio 0.5 ]
 
   update-color
   update-reporter
@@ -186,6 +197,7 @@ to assign-fe [ cluster? ]
       set pcolor red
       set fe? True
       set redox-balance 0
+      set surface-unplanarity 0
     ]
   ]
   [ ask n-of 1 (patches with [(fe? = True) and ((count neighbors with [(fe? != True) and (distance-nowrap myself = 1)]) > 0)]) [
@@ -193,6 +205,7 @@ to assign-fe [ cluster? ]
         set pcolor red
         set fe? True
         set redox-balance 0
+        set surface-unplanarity 0
       ]
     ]
   ]
@@ -218,7 +231,7 @@ end
 
 ;;fe2 is oxidized through oxygen
 to fe2-oxidation-by-air
-  ask patches with [(fe? = True) and (redox-balance < 0) and (p-oxygen >= 1)] [
+  ask patches with [(fe? = True) and (redox-balance < 0) and (p-oxygen >= 4)] [
     ;;minimum amount of iron oxidized. E. g. oxidized-iron-int = 4 for redox-balance * chemical-oxidation-factor = -4.5
     let oxidized-iron-int -1 * (ceiling (redox-balance * chemical-oxidation-factor * p-oxygen / 21))
     ;;stochastically oxidize the remaining broken iron. E. g. prob-remaining = 0.5 for redox-balance * chemical-oxidation-factor = -4.5
@@ -319,6 +332,7 @@ to make-bacteria
     set color blue
     set size 1
     set adhering? False
+    set on-pit? False
     set adhesion-cooldown 0
     set energy 10
     let destiny (one-of (patches with [fe? != True]))
@@ -332,6 +346,7 @@ to make-bacteria
     set color red
     set size 1
     set adhering? False
+    set on-pit? False
     set adhesion-cooldown 0
     set energy 10
     let destiny (one-of (patches with [fe? != True]))
@@ -381,11 +396,6 @@ to plot-bacteria-per-layer
   py:set "eshuttlesPerLayer" eshuttles-per-layer-plt
   py:set "zcoordinates" ( range min-pzcor ( max-pzcor + 1 ) ) ;; y axis
   py:set "selectedTicks" selected-ticks
-  py:set "bacteriaCount" initial-number-fe3reducer + initial-number-fe2oxidizer
-  py:set "maxZcor" max-pzcor
-  py:set "minZcor" min-pzcor
-  py:set "nrows" 0
-  py:set "ncols" 0
  (py:run
     ;; Construct dataframe
     "import pandas as pd"
@@ -404,12 +414,14 @@ to manage-shuttles
   if (count e-shuttle) > 0 [
     ask e-shuttle [
       ;; degraded?
-      if (random-float 1) < degradation-prob [
+      if (mobile? = True) and (random-float 1 < degradation-prob) [
         die
       ]
 
       ;; movement
-      move 2
+      if (mobile? = True) [
+        move 2
+      ]
 
       ;; electron transfer upon contact with Fe3+
       ifelse (([fe?] of patch-here) = True) and (color = blue) [
@@ -436,8 +448,9 @@ to manage-shuttles
   ]
 
   ;; produce e-shuttle
-  ask fe3reducer with [(([fe?] of patch-here) != True) and (count (e-shuttle in-radius 2) <= 3)] [
-    if energy > 3 [
+  ask fe3reducer with [((([fe?] of patch-here) != True) and (count (e-shuttle in-radius 2) <= 3)) or
+                       (adhering? = True)] [
+    if energy > eshuttle-cost [
       hatch-e-shuttle 1 [
         set shape "dot"
         set size 0.5
@@ -446,17 +459,14 @@ to manage-shuttles
         tilt-up random 360
         set mobile? True
         ;; if the bacterium adheres on an iron mineral surface...
-        if [adhering? = True] of myself [
-          ;; and it forms a pocket between itself and the iron mineral...
-          if random-float 1 <= surface-unplanarity [
-            ;; one forth of the e-shuttles reside inside the pocket
-            if random-float 1 <= 0.25 [
-              set mobile? False
-            ]
+        if [on-pit? = True] of myself [
+          ;; one forth of the e-shuttles reside inside the pocket
+          if random-float 1 <= pit-eshuttle-proportion [
+            set mobile? False
           ]
         ]
       ]
-      set energy energy - 3
+      set energy energy - eshuttle-cost
     ]
   ]
 end
@@ -538,10 +548,9 @@ end
 
 to reduce-iron
   if [ fe? = True ] of patch-here [
-    ;; Shewanella uses O2 as an electron sink
-    ;; only when O2 is missing, it reduces Fe3 to Fe2 to gain energy
+    ;; only when there is low Fe2+ on the surface, Fe3+ can be reduced to Fe2+
     if (random-float 1) > ((log ([-1 * redox-balance + 1] of patch-here) 10) * passivation-factor) [
-    ;; only when there is no Fe2+ on the surface, Fe3+ can be reduced to Fe2+
+      set contact-reduction-count contact-reduction-count + 1
       ask patch-here [
         set redox-balance redox-balance - 1
       ]
@@ -571,7 +580,30 @@ to oxidize-iron
 end
 
 to surface-adhesion
+  ;; process of adhesion of the bacterium
+  ask fe3reducer with [(adhering? = False) and [(fe? = True) and (-1 * redox-balance < adhesion-start-treshold)] of patch-here] [
+    if (random-float 1 < adhesion-start-probability) [
+      set adhering? True
+      ;; if the bacterium sits on top of a pit
+      ifelse random-float 1 <= [surface-unplanarity] of patch-here [
+        set on-pit? True
+      ]
+      [
+        ask patch-here [set surface-unplanarity min (list (surface-unplanarity + planarity-loss-factor) max-surface-unplanarity)]
+      ]
+    ]
+  ]
 
+  ;; process of detachment
+  ask fe3reducer with [((adhering? = True) and [(-1 * redox-balance > adhesion-dissolve-treshold)] of patch-here) or
+                       (p-oxygen >= 3)] [
+    if (random-float 1 < adhesion-dissolve-probability) [
+      set adhering? False
+      ask e-shuttle-here [
+        set mobile? True
+      ]
+    ]
+  ]
 end
 
 ;;;; OTHER PROCEDURES ;;;;
@@ -786,15 +818,15 @@ Environment related settings
 1
 
 SLIDER
-474
+470
 423
-668
+676
 456
 chemical-oxidation-factor
 chemical-oxidation-factor
 0
-1
-0.04
+0.5
+0.25
 0.01
 1
 NIL
@@ -846,7 +878,7 @@ TEXTBOX
 394
 882
 412
-Biofilm related settings
+Adhesion related settings
 11
 0.0
 1
@@ -854,13 +886,13 @@ Biofilm related settings
 SLIDER
 700
 423
-886
+903
 456
-biofilm-start-treshold
-biofilm-start-treshold
+adhesion-start-treshold
+adhesion-start-treshold
 0
 1
-0.0
+0.1
 0.05
 1
 NIL
@@ -869,13 +901,13 @@ HORIZONTAL
 SLIDER
 700
 466
-887
+904
 499
-biofilm-dissolve-treshold
-biofilm-dissolve-treshold
+adhesion-dissolve-treshold
+adhesion-dissolve-treshold
 0
 1
-0.0
+0.4
 0.05
 1
 NIL
@@ -883,29 +915,14 @@ HORIZONTAL
 
 SLIDER
 700
-508
-888
-541
-biofilm-release-probability
-biofilm-release-probability
+509
+906
+542
+adhesion-start-probability
+adhesion-start-probability
 0
 1
-0.0
 0.05
-1
-NIL
-HORIZONTAL
-
-SLIDER
-700
-554
-888
-587
-biofilm-recruitment-probability
-biofilm-recruitment-probability
-0
-1
-0.0
 0.05
 1
 NIL
@@ -967,17 +984,17 @@ PENS
 "transfer count" 1.0 0 -5298144 true "" "plot shuttle-transfer-count"
 
 PLOT
-921
-422
-1124
-750
+460
+466
+681
+813
 Ticks * fe3 reducers
 NIL
 NIL
 0.0
 10.0
 0.0
-1.0
+0.1
 true
 false
 "" ""
@@ -985,10 +1002,10 @@ PENS
 "" 1.0 0 -5298144 true "" "plot fe3reducers-on-fe / ( ( count fe3reducer ) * ticks + 1 ) "
 
 PLOT
-1145
+1210
 422
-1454
-751
+1537
+770
 Fe3 reducers on fe patches
 time
 fe3 reducers on fe patches
@@ -1001,6 +1018,99 @@ false
 "" ""
 PENS
 "fe reducers on fe patches" 1.0 0 -5298144 true "" "plot fe3reducers-on-fe"
+
+SLIDER
+700
+553
+907
+586
+adhesion-dissolve-probability
+adhesion-dissolve-probability
+0
+1
+0.6
+0.01
+1
+NIL
+HORIZONTAL
+
+SLIDER
+700
+597
+908
+630
+pit-eshuttle-proportion
+pit-eshuttle-proportion
+0
+1
+0.25
+0.01
+1
+NIL
+HORIZONTAL
+
+SLIDER
+700
+639
+908
+672
+planarity-loss-factor
+planarity-loss-factor
+0
+1
+0.01
+0.01
+1
+NIL
+HORIZONTAL
+
+SLIDER
+69
+638
+224
+671
+eshuttle-cost
+eshuttle-cost
+0
+20
+6.0
+1
+1
+NIL
+HORIZONTAL
+
+SLIDER
+260
+555
+442
+588
+max-surface-unplanarity
+max-surface-unplanarity
+0.5
+1
+0.8
+0.01
+1
+NIL
+HORIZONTAL
+
+PLOT
+926
+422
+1197
+674
+Ratio of reductions
+time
+reduction ratio (e shuttles / total)
+0.0
+1.0
+0.0
+1.0
+true
+false
+"" ""
+PENS
+"default" 1.0 0 -16777216 true "" "plot reduction-ratio"
 
 @#$#@#$#@
 # Overview
