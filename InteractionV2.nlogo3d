@@ -1,0 +1,2176 @@
+extensions [csv]
+
+breed [ fe3reducer fe3reducers ]
+breed [ fe2oxidizer fe2oxidizers ]
+breed [ nanoparticle nanoparticles ]
+
+fe3reducer-own[
+  surface-area ;;Surface area of Shewanella according to Bonneville 2006. Unit is nm²
+  adhering?
+  time-adhered
+]
+
+patches-own[
+  cluster-identifier
+  fe2-ads
+  fe3?
+]
+
+nanoparticle-own[
+  diameter
+  fe3-np
+  fe2-np
+]
+
+globals[
+  fe2
+  oxygen?
+  oxygen-csv ;; reads input file
+  fe2-reporter
+]
+
+to setup
+  clear-all
+  reset-ticks
+
+  set-default-shape fe3reducer "default"
+  set-default-shape fe2oxidizer "default"
+  set-default-shape nanoparticle "circle"
+
+  make-iron-patches
+  make-agents
+  set fe2 start-medium-fe2
+  set oxygen? False
+  set fe2-reporter start-medium-fe2
+  ;;read input file as oxygen-csv and remove the name row
+  set oxygen-csv (csv:from-file "E:/Küsel/Models/OxygenValues.csv" ";")
+end
+
+to go
+  ;; Check if the criterion for ending the simulation is fulfilled (i. e. no values left in the csv-file).
+  if ((empty? oxygen-csv) = True or ticks = max-ticks) [ stop ]
+  switch-oxygen
+  movement
+  ;; If the environment is anoxic, allow for the reduction of iron by the fe3-reducer.
+  if oxygen? != True [
+    reduction
+  ]
+  ;; if the environment is oxic, allow for abiotic and biotic (fe2-oxidizer) oxidation.
+  if oxygen? = True [
+    biotic-oxidation
+    if (sum ([fe2-ads] of patches) + sum ([fe2-np] of nanoparticle) + fe2) > 0 [
+      abiotic-oxidation
+    ]
+  ]
+  dissociation
+  equilibrate
+  np-loss
+  set fe2-reporter ((sum([fe2-np] of nanoparticle)) + (sum ([fe2-ads] of (patches with [fe3? = True]))) + fe2)
+  tick
+end
+
+
+;;switches oxygen-levels to points of time specified in a csv-file.
+to switch-oxygen
+  if ((empty? oxygen-csv) = False)
+  [
+    if (ticks = (item 0 (item 0 oxygen-csv)))
+    [
+      ifelse oxygen? = True
+        [set oxygen? False]
+        [set oxygen? True]
+      set oxygen-csv remove-item 0 oxygen-csv
+    ]
+  ]
+end
+
+;;;;PATCH PROCEDURES;;;;
+
+;; setup the patches at the beginning of the model
+to make-iron-patches
+  ;; initialize patches
+  ask patches [
+    set cluster-identifier 1
+    set fe3? False
+    set fe2-ads 0
+  ]
+
+  ;; create fe-containing patches randomly
+  ;; non-clustered fe-patches
+  repeat (count patches * (fe-patch-percentage / 100) * (1 - fe-clustering / 100)) [
+    ifelse any? (patches with [(fe3? = False) and
+                  (not (any? neighbors with [ fe3? = True]))]) [
+      assign-fe False
+    ]
+    [
+      assign-fe True
+    ]
+  ]
+
+  ;; clustered fe-patches
+  repeat (count patches * (fe-patch-percentage / 100) * (fe-clustering / 100)) [
+    ifelse any? (patches with [ fe3? = True ]) [
+      assign-fe True
+    ]
+    [
+      assign-fe False
+    ]
+  ]
+
+  while [ count patches with [(fe3? = True) and (cluster-identifier = 1)] > 0]
+    [ask n-of 1 (patches with [(fe3? = True) and (cluster-identifier = 1)])
+      [ set cluster-identifier random-float 1
+        group-clusters ]
+    ]
+end
+
+;; assign iron to the patches, if cluster? = False a new seed for a cluster is created, else the cluster is extended by another patch
+to assign-fe [ cluster? ]
+  ifelse cluster? = False [
+    ask n-of 1 (patches with [(fe3? = False) and
+                  (not (any? neighbors with [fe3? = True]))]) [
+      set pcolor brown
+      set fe3? True
+      update-mineral-color
+    ]
+  ]
+  [ ask n-of 1 (patches with [(fe3? = True) and ((count neighbors with [(fe3? = False) and (distance-nowrap myself = 1)]) > 0)]) [
+      ask (last sort-on [count neighbors with [(fe3? = True) and (distance-nowrap myself = 1)]] neighbors with [(fe3? = False) and (distance-nowrap myself) = 1]) [
+        set pcolor brown
+        set fe3? True
+        update-mineral-color
+      ]
+    ]
+  ]
+end
+
+;;assigns same cluster-identifier to patches of the same cluster
+to group-clusters
+  ask neighbors with [(cluster-identifier = 1) and
+    (fe3? = True) and
+    (distancexyz-nowrap ([pxcor] of myself) ([pycor] of myself) ([pzcor] of myself) <= 1.74)]
+  [ set cluster-identifier [cluster-identifier] of myself
+    group-clusters ]
+end
+
+;; colors the patches according to the amount of Fe2+ on the surface. The more Fe2+ the darker appears the blue of the patch.
+to update-mineral-color
+  ifelse fe3? = True
+    [set pcolor 35]
+    [set pcolor black]
+end
+
+;;;;TURTLE PROCEDURES;;;;
+
+;; setup the bacteria at the beginning of the model
+to make-agents
+  ;; Shewanella
+  create-fe3reducer initial-number-fe3reducer [
+    set color blue
+    set size 2
+    set adhering? False
+    set surface-area ((random-normal 8.3 1) * 1000000)
+    let destiny (one-of (patches with [fe3? = False]))
+    setxyz ([pxcor] of destiny) ([pycor] of destiny) ([pzcor] of destiny)
+    set roll random 360
+    tilt-up random 360
+  ]
+  ;; Sideroxydans
+  create-fe2oxidizer initial-number-fe2oxidizer [
+    set color red
+    set size 2
+    let destiny (one-of (patches with [fe3? = False]))
+    setxyz ([pxcor] of destiny) ([pycor] of destiny) ([pzcor] of destiny)
+    set roll random 360
+    tilt-up random 360
+  ]
+  ;; Nanoparticles
+  create-nanoparticle initial-number-nanoparticle [
+    set color brown
+    set diameter (random 99) + 1
+    set fe3-np (iron-per-cubicnm * ((4 / 3) * pi * ((diameter / 2) ^ 3)))
+    set fe2-np 0
+    set size max list (diameter / 500) (0.2)
+    let destiny (one-of (patches with [fe3? = False]))
+    setxyz ([pxcor] of destiny) ([pycor] of destiny) ([pzcor] of destiny)
+    set roll random 360
+    tilt-up random 360
+  ]
+end
+
+;; handles the movement of all the agents
+to movement
+  ;; only nanoparticles not bound to bacteria move themselves.
+  ;; they move faster the smaller they are.
+  ask nanoparticle with [count my-links = 0] [
+    move-diffusive (max list (50 - diameter / 2) (1))
+  ]
+  ;; oxydizers move diffusive. Bound nanoparticles are forced to move with them.
+  ask fe2oxidizer [
+    move-diffusive speed-fe2oxidizer
+    ask link-neighbors [
+      move-to myself
+    ]
+  ]
+  ;; reducers movement is guided by chemotaxis. They increase their speed and tumbling frequency
+  ;; if they are close to iron-minerals. Bound nanoparticles are forced to move with them.
+  ask fe3reducer [
+    if adhering? = False [
+      move-chemotaxis speed-fe3reducer
+      ask link-neighbors [
+        move-to myself
+      ]
+    ]
+    if adhering? = True [
+      if adhesion-strategy = "biofilm" [
+        set time-adhered time-adhered + 1 + (sum [count fe3reducer with [adhering? = True]] of neighbors)
+        if fe2-ads > fe2-ads-tolerance and random-float 1 < min list 0.20 (max list 0.01 (0.2 - 0.19 * (time-adhered / 120))) [
+          set time-adhered 0
+          set adhering? False
+        ]
+      ]
+      if adhesion-strategy = "electrostatic" [
+        if fe2-ads > fe2-ads-tolerance [
+          set adhering? False
+        ]
+      ]
+    ]
+  ]
+end
+
+;; agents move around completely random.
+to move-diffusive [ speed ]
+  set roll random 360
+  tilt-up random 360
+  ifelse (any? (([neighbors6] of patch-ahead speed) with [fe3? = False])) [
+    fd speed
+    if (breed = nanoparticle) [
+      aggregate-adhere
+    ]
+  ]
+  [
+    let target-CI ([cluster-identifier] of patch-ahead speed)
+    move-to min-one-of (patches with [cluster-identifier = target-CI]) [distance myself]
+    if (breed = nanoparticle) [
+      aggregate-adhere
+    ]
+  ]
+end
+
+;; move agents chemotactically. Increased frequenzy of tumbling and velocity upon iron contact.
+to move-chemotaxis [ speed ]
+
+  ;; CONSIDER ACTIVATING CHEMOTAXIS ALSO IF ENOUGH NANOPARTICLES ARE NEARBY
+  let chemotaxis-on? (any? (neighbors with [fe3? = True]))
+  let turns 1
+
+  if chemotaxis-on? = True [
+    set turns 3
+    set speed (speed * (2 / 3))
+  ]
+
+  repeat turns [
+    set roll random 360
+    tilt-up random 360
+    ifelse (any? (([neighbors6] of patch-ahead speed) with [fe3? = False])) [
+      fd speed
+      aggregate-adhere
+    ]
+    [
+      let target-CI ([cluster-identifier] of patch-ahead speed)
+      move-to min-one-of (patches with [cluster-identifier = target-CI]) [distance myself]
+      aggregate-adhere
+    ]
+    if adhering? = True [
+      stop
+    ]
+  ]
+end
+
+to aggregate-adhere
+  ;; Caller is a nanoparticle.
+  ifelse member? self nanoparticle = True [
+    ask other turtles-here [
+      ;; if the encountered agent on the same patch is a nanoparticle, they aggregate and form
+      ;; a larger nanoparticle with the probability mineral-aggregation-probability.
+      if (breed = nanoparticle) and (count link-neighbors = 0) [
+        if random-float 1 <= mineral-aggregation-probability / 100 [
+          ask myself [
+            set fe3-np (([fe3-np] of myself) + ([fe3-np] of self))
+            set fe2-np (([fe2-np] of myself) + ([fe2-np] of self))
+            set diameter ((2 * (fe3-np + fe2-np) * (3 / 4)  / (iron-per-cubicnm * pi)) ^ (1 / 3))
+            set size (max list (diameter / 500) (0.2))
+          ]
+          die
+          stop
+        ]
+      ]
+      ;; Upon contact with a bacterium, they adhere to the reducer if they fulfill the
+      ;; adhesion-requirement (see below for an explanation).
+      if breed = fe3reducer and ([fe3-np / (max list (fe3-np + fe2-np) (0.0000001)) > np-attachment-threshold and (count link-neighbors = 0) ] of myself) [
+        create-link-with myself
+        stop
+      ]
+    ]
+  ]
+  ;; Caller is an iron reducer.
+  [
+    ;; Reducer adhere with a nanoparticle on the same patch if the ratio of fe3+ to total fe on the np
+    ;; is higher than a certain threshold adhesion-requirement.
+    ask ((nanoparticle-on patch-here) with [ ((fe3-np / (max list (fe3-np + fe2-np) (0.0000001))) > np-attachment-threshold) and (count link-neighbors = 0) ]) [
+      create-link-with myself
+    ]
+
+    ;; Upon conctact with a mineral patch the reducer adheres to the patch, unless the adsorbed fe2+
+    ;; is higher than the tolerated value fe2-ads-tolerance.
+    if ([(fe3? = True) and (fe2-ads < fe2-ads-tolerance)] of patch-here) [
+      if adhesion-strategy = "biofilm" [
+        set time-adhered 0
+      ]
+      set adhering? True
+    ]
+  ]
+end
+
+to reduction
+  ask fe3reducer [
+    if adhering? = True [
+      ask patch-here [
+        set fe2-ads (fe2-ads + contact-reduction-rate)
+      ]
+    ]
+
+    ;; capacity for non-bulk-mineral reduction per bacterium.
+    let reduction-capacity contact-reduction-rate * 4
+    ;; reduction of nanoparticles adhering to the cell. They are reduced by the factor
+    ;; np-mineral-reductio-ratio times more faster than iron minerals. Nanoparticles with
+    ;; a larger surface gets stronger reduced than smaller nanoparticles, if they are large
+    ;; enough to maintain contact with additional metal reducing proteins (MtrC) on the surface.
+    ;; According to Bonneville 2006, the number of MtrC on the cell surface amount to
+    ;; approximately 10000.
+    ask link-neighbors with [fe3-np > 0] [
+      let occupied-MtrC max list (1) (floor (((diameter ^ 2) / ([surface-area] of myself)) * 10000))
+      let electrons-on-this-np ((occupied-MtrC / 10000) * np-mineral-reduction-ratio * contact-reduction-rate)
+      set fe2-np (fe2-np + (min list fe3-np electrons-on-this-np))
+      set fe3-np (fe3-np - (min list fe3-np electrons-on-this-np))
+      set reduction-capacity (reduction-capacity - electrons-on-this-np / np-mineral-reduction-ratio)
+    ]
+
+    ;; e-shuttle reduction of mineral surfaces within e-shuttle-range.
+    let nr-close-minerals (count (patches with [(fe3? = True) and (any? (neighbors6 with [fe3? = False]) = True) and (distance myself <= e-shuttle-range)]))
+    ask patches with [(fe3? = True) and (any? (neighbors6 with [fe3? = False]) = True) and (distance myself <= e-shuttle-range)] [
+      set fe2-ads (fe2-ads + reduction-capacity / nr-close-minerals)
+    ]
+  ]
+end
+
+;; Fe2+ oxidation of fe2-oxidizers
+to biotic-oxidation
+  ask fe2oxidizer [
+    if fe2 > 0.01 [
+      ;; oxidation of Fe2+ dissolved in the medium. Leads to nanoparticle growth.
+      let fe2-used-from-medium (min list (fe2 / (count fe2oxidizer)) (contact-oxidation-rate))
+      if encrustation-strategy = "shedding" [
+        ;; ~40 Nanoparticles on surface determined by electron microscopy
+        if (count link-neighbors) < 40 [
+          let nps-to-hatch 40 - count link-neighbors
+          hatch-nanoparticle nps-to-hatch [
+            set color brown
+            set fe3-np (fe2-used-from-medium / 40)
+            set fe2-np 0
+            set diameter ((2 * (fe3-np + fe2-np) * (3 / 4)  / (iron-per-cubicnm * pi)) ^ (1 / 3))
+            set size max list (diameter / 500) (0.2)
+            setxyz ([pxcor] of patch-here) ([pycor] of patch-here) ([pzcor] of patch-here)
+            create-link-with myself
+          ]
+          set fe2 (fe2 - nps-to-hatch * (fe2-used-from-medium / 40))
+          set fe2-used-from-medium (fe2-used-from-medium - nps-to-hatch * (fe2-used-from-medium / 40))
+        ]
+
+        ;; oxidation of nanoparticle-bound Fe2+. Does not lead to the growth of the nanoparticle.
+        let surface-of-all-nps (sum ([4  * pi * (0.5 * diameter) ^ 2] of link-neighbors))
+        ask link-neighbors with [diameter > 0] [
+          let fe2-from-medium-on-this-np (fe2-used-from-medium * (4  * pi * (0.5 * diameter) ^ 2) / surface-of-all-nps)
+          set fe2 fe2 - fe2-from-medium-on-this-np
+          set fe3-np (fe3-np + fe2-from-medium-on-this-np)
+          set diameter ((2 * (fe3-np + fe2-np) * (3 / 4)  / (iron-per-cubicnm * pi)) ^ (1 / 3))
+          set size max list (diameter / 500) (0.2)
+        ]
+      ]
+
+      if encrustation-strategy = "low pH" [
+        let neighbored-nps turtle-set nanoparticle-on neighbors
+        ifelse count neighbored-nps = 0 [
+          ask one-of neighbors [
+            sprout-nanoparticle 1 [
+              set color brown
+              set fe3-np fe2-used-from-medium
+              set fe2-np 0
+              set diameter ((2 * (fe3-np + fe2-np) * (3 / 4)  / (iron-per-cubicnm * pi)) ^ (1 / 3))
+              set size max list (diameter / 500) (0.2)
+              setxyz ([pxcor] of patch-here) ([pycor] of patch-here) ([pzcor] of patch-here)
+            ]
+            set fe2 fe2 - fe2-used-from-medium
+          ]
+        ]
+        [
+          ask neighbored-nps [
+            set fe3-np fe3-np + fe2-used-from-medium / (count neighbored-nps)
+            set diameter ((2 * (fe3-np + fe2-np) * (3 / 4)  / (iron-per-cubicnm * pi)) ^ (1 / 3))
+            set size max list (diameter / 500) (0.2)
+            set fe2 fe2 - fe2-used-from-medium / (count neighbored-nps)
+          ]
+        ]
+      ]
+    ]
+  ]
+end
+
+;; abiotic oxidation of Fe2+ based on first order kinetics.
+to abiotic-oxidation
+  let total-fe2 (sum ([fe2-ads] of patches) + sum ([fe2-np] of nanoparticle) + fe2)
+  let surface-mineral-patches (count (patches with [(fe3? = True) and (any? (neighbors6 with [fe3? = False]))]))
+  let total-surfaces ((count nanoparticle) + surface-mineral-patches)
+  let fe2-share-nanoparticles fe2 * abiotic-oxidation-ratio * ((count nanoparticle) / total-surfaces)
+  set fe2 (fe2 * (1 - abiotic-oxidation-ratio))
+  ask patches with [(fe3? = True) and (any? (neighbors6 with [fe3? = False]))] [
+    set fe2-ads (fe2-ads * (1 - abiotic-oxidation-ratio))
+  ]
+
+  let total-nanoparticles-surface (sum ([4  * pi * (0.5 * diameter) ^ 2] of nanoparticle))
+
+  if total-nanoparticles-surface > 0 [
+    ask nanoparticle [
+      ;;existing Fe3 on the np + Fe3 from oxidation of Fe2 adsorbed on the np + Fe3 from oxidation of dissolved Fe2
+      set fe3-np fe3-np + fe2-np * abiotic-oxidation-ratio + (fe2-share-nanoparticles * (4  * pi * (0.5 * diameter) ^ 2) / total-nanoparticles-surface)
+      set fe2-np (fe2-np * (1 - abiotic-oxidation-ratio))
+      set diameter ((2 * (fe3-np + fe2-np) * (3 / 4)  / (iron-per-cubicnm * pi)) ^ (1 / 3))
+    ]
+  ]
+end
+
+;; check if the adhesion condition of each nanoparticle associated with a bacterium is still valid.
+;; detach it from the bacterium otherwise.
+to dissociation
+  ask nanoparticle with [count link-neighbors = 1] [
+    ;; release from fe3-reducer if the fe2+ ratio raises beyond the np-dissociation-threshold.
+    if [breed = fe3reducer] of one-of link-neighbors [
+      if (fe2-np / (max list (fe3-np + fe2-np) (0.0000001))) > np-dissociaton-threshold [
+        ask my-links [die]
+      ]
+    ]
+  ]
+  ;; detach the nanoparticle from the fe2-oxidizer with a probability increasing linearly with
+  ;; the diameter up to a shedding-diameter, at which the nanoparticle always dissociates from the bacterium.
+  ask fe2oxidizer with [count link-neighbors > 0] [
+    ask link-neighbors [
+      if random-normal diameter 2 >= shedding-diameter [
+        ask my-links [die]
+      ]
+    ]
+  ]
+end
+
+;; equilibrates the Fe2+ between the solution and mineral/nanoparticle surfaces.
+to equilibrate
+  let mineral-surfaces count patches with [fe3? = True and (count neighbors6 with [fe3? = False] >= 1)]
+  let medium-patches count patches with [fe3? = False]
+  ask patches with [(fe3? = True) and (any? (neighbors6 with [fe3? = False]))] [
+    let fe2-per-mediumpatch (fe2 / count (patches with [ fe3? = False ]))
+    let fe2-solid-to-solution fe2-equilibrium-rate * (fe2-ads - (fe2-solid-ineq / (1 - fe2-solid-ineq)) * fe2-per-mediumpatch * (mineral-surfaces / medium-patches))
+    set fe2 fe2 + fe2-solid-to-solution
+    set fe2-ads fe2-ads - fe2-solid-to-solution
+  ]
+
+  ask patches with [any? (nanoparticle-here with [diameter > 0]) = True] [
+    let total-sa (sum ([4 * pi * (0.5 * diameter) ^ 2] of (nanoparticle-here with [diameter > 0])))
+    ask nanoparticle-here with [diameter > 0] [
+      let fe2-per-mediumpatch (fe2 / count (patches with [ fe3? = False ]))
+      let fe2-np-to-solution fe2-equilibrium-rate * (fe2-np - fe2-solid-ineq * (fe2-np + fe2-per-mediumpatch) * ((4  * pi * (0.5 * diameter) ^ 2) / total-sa))
+      set fe2 fe2 + fe2-np-to-solution
+      set fe2-np fe2-np - fe2-np-to-solution
+      set diameter ((2 * (fe3-np + fe2-np) * (3 / 4)  / (iron-per-cubicnm * pi)) ^ (1 / 3))
+      set size max list (diameter / 500) (0.2)
+    ]
+  ]
+end
+
+to np-loss
+  ;; kills nanoparticles with no remaining iron.
+  ask nanoparticle with [fe2-np + fe3-np <= 0] [
+    die
+  ]
+  ;; constantly removes non-attached nanoparticles with a probability of np-loss-frequency.
+  ask nanoparticle with [count link-neighbors = 0] [
+    if random-float 1 < (np-loss-percentage / 100) [
+      ask one-of (patches with [(fe3? = True) and (any? (neighbors6 with [fe3? = False]))]) [
+        set fe2-ads fe2-ads + ([fe2-np] of myself)
+      ]
+      die
+    ]
+  ]
+end
+@#$#@#$#@
+GRAPHICS-WINDOW
+0
+0
+281
+282
+-1
+-1
+13.0
+1
+10
+1
+1
+1
+0
+1
+1
+1
+-10
+10
+-10
+10
+-10
+10
+1
+0
+1
+ticks
+30.0
+
+BUTTON
+29
+29
+92
+62
+setup
+setup
+NIL
+1
+T
+OBSERVER
+NIL
+NIL
+NIL
+NIL
+1
+
+BUTTON
+30
+73
+93
+106
+go
+go
+T
+1
+T
+OBSERVER
+NIL
+NIL
+NIL
+NIL
+1
+
+SLIDER
+143
+230
+316
+263
+max-ticks
+max-ticks
+0
+100000
+40000.0
+1000
+1
+NIL
+HORIZONTAL
+
+SLIDER
+141
+30
+314
+63
+fe-patch-percentage
+fe-patch-percentage
+0
+10
+2.0
+0.2
+1
+%
+HORIZONTAL
+
+SLIDER
+142
+70
+314
+103
+fe-clustering
+fe-clustering
+0
+100
+90.0
+1
+1
+%
+HORIZONTAL
+
+SLIDER
+142
+109
+314
+142
+initial-number-fe3reducer
+initial-number-fe3reducer
+0
+100
+20.0
+1
+1
+NIL
+HORIZONTAL
+
+SLIDER
+142
+148
+314
+181
+initial-number-fe2oxidizer
+initial-number-fe2oxidizer
+0
+100
+20.0
+1
+1
+NIL
+HORIZONTAL
+
+SLIDER
+142
+189
+315
+222
+initial-number-nanoparticle
+initial-number-nanoparticle
+0
+100
+0.0
+1
+1
+NIL
+HORIZONTAL
+
+TEXTBOX
+211
+10
+361
+28
+Input
+11
+0.0
+1
+
+SLIDER
+140
+439
+314
+472
+mineral-aggregation-probability
+mineral-aggregation-probability
+0
+100
+100.0
+1
+1
+%
+HORIZONTAL
+
+SLIDER
+323
+189
+496
+222
+np-attachment-threshold
+np-attachment-threshold
+0
+1
+0.5
+0.1
+1
+NIL
+HORIZONTAL
+
+SLIDER
+142
+272
+317
+305
+speed-fe2oxidizer
+speed-fe2oxidizer
+0
+10
+5.0
+1
+1
+NIL
+HORIZONTAL
+
+SLIDER
+140
+314
+318
+347
+speed-fe3reducer
+speed-fe3reducer
+0
+10
+5.0
+1
+1
+NIL
+HORIZONTAL
+
+SLIDER
+141
+356
+317
+389
+iron-per-cubicnm
+iron-per-cubicnm
+0
+0.05
+0.027
+0.001
+1
+kk atoms
+HORIZONTAL
+
+SLIDER
+323
+30
+493
+63
+contact-reduction-rate
+contact-reduction-rate
+0
+100
+10.0
+1
+1
+kk atoms/min
+HORIZONTAL
+
+SLIDER
+324
+70
+496
+103
+fe2-ads-tolerance
+fe2-ads-tolerance
+0
+1000
+300.0
+100
+1
+NIL
+HORIZONTAL
+
+SLIDER
+324
+109
+496
+142
+np-mineral-reduction-ratio
+np-mineral-reduction-ratio
+50
+150
+100.0
+1
+1
+NIL
+HORIZONTAL
+
+SLIDER
+142
+398
+315
+431
+start-medium-fe2
+start-medium-fe2
+0
+1000
+0.0
+10
+1
+kk atoms
+HORIZONTAL
+
+SLIDER
+323
+148
+497
+181
+abiotic-oxidation-ratio
+abiotic-oxidation-ratio
+0
+0.05
+0.01
+0.001
+1
+NIL
+HORIZONTAL
+
+SLIDER
+324
+230
+496
+263
+np-dissociaton-threshold
+np-dissociaton-threshold
+0
+1
+0.7
+0.01
+1
+NIL
+HORIZONTAL
+
+SLIDER
+324
+273
+496
+306
+shedding-diameter
+shedding-diameter
+0
+100
+10.0
+1
+1
+nm
+HORIZONTAL
+
+SLIDER
+323
+315
+495
+348
+fe2-equilibrium-rate
+fe2-equilibrium-rate
+0
+0.1
+0.02
+0.001
+1
+NIL
+HORIZONTAL
+
+PLOT
+552
+22
+924
+234
+Fe2 overview
+ticks
+Fe2
+0.0
+10.0
+0.0
+10.0
+true
+true
+"" ""
+PENS
+"Dissolved Fe2" 1.0 0 -13345367 true "" "plot fe2"
+"Fe2 on minerals" 1.0 0 -6459832 true "" "plot sum ([fe2-ads] of (patches with [fe3? = True]))"
+"Fe2 total" 1.0 0 -13840069 true "" "plot (sum([fe2-np] of nanoparticle)) + (sum ([fe2-ads] of (patches with [fe3? = True]))) + fe2"
+
+PLOT
+550
+267
+761
+389
+Diameters of nanoparticles
+diameter
+count
+0.0
+100.0
+0.0
+50.0
+true
+false
+"set-plot-pen-mode 1\nset-histogram-num-bars 20" "histogram [round diameter] of nanoparticle"
+PENS
+"default" 1.0 0 -16777216 true "" "histogram [round diameter] of nanoparticle"
+
+SLIDER
+324
+357
+496
+390
+e-shuttle-range
+e-shuttle-range
+0
+20
+10.0
+1
+1
+NIL
+HORIZONTAL
+
+TEXTBOX
+118
+38
+137
+56
+1 C
+11
+0.0
+1
+
+TEXTBOX
+118
+79
+135
+97
+2 C
+11
+0.0
+1
+
+TEXTBOX
+118
+117
+136
+135
+3 C
+11
+0.0
+1
+
+TEXTBOX
+118
+156
+136
+174
+4 C
+11
+0.0
+1
+
+TEXTBOX
+118
+198
+135
+216
+5 C
+11
+0.0
+1
+
+TEXTBOX
+118
+239
+135
+257
+6 C
+11
+0.0
+1
+
+TEXTBOX
+117
+280
+134
+298
+7 C
+11
+0.0
+1
+
+TEXTBOX
+116
+322
+135
+350
+8 C
+11
+0.0
+1
+
+TEXTBOX
+116
+365
+154
+383
+9 C
+11
+0.0
+1
+
+TEXTBOX
+113
+406
+136
+434
+10 C
+11
+0.0
+1
+
+TEXTBOX
+118
+447
+133
+465
+11
+11
+0.0
+1
+
+TEXTBOX
+506
+40
+532
+58
+12
+11
+0.0
+1
+
+TEXTBOX
+506
+78
+533
+96
+13
+11
+0.0
+1
+
+TEXTBOX
+506
+118
+526
+136
+14
+11
+0.0
+1
+
+TEXTBOX
+505
+160
+531
+178
+15
+11
+0.0
+1
+
+TEXTBOX
+506
+201
+528
+219
+16
+11
+0.0
+1
+
+TEXTBOX
+505
+240
+528
+258
+17
+11
+0.0
+1
+
+TEXTBOX
+505
+285
+532
+303
+18
+11
+0.0
+1
+
+TEXTBOX
+506
+327
+528
+345
+19
+11
+0.0
+1
+
+TEXTBOX
+506
+366
+527
+384
+20
+11
+0.0
+1
+
+SLIDER
+325
+439
+496
+472
+contact-oxidation-rate
+contact-oxidation-rate
+0
+100
+36.0
+1
+1
+kk atoms/min
+HORIZONTAL
+
+SLIDER
+325
+398
+496
+431
+fe2-solid-ineq
+fe2-solid-ineq
+0
+1
+0.9
+0.01
+1
+NIL
+HORIZONTAL
+
+SLIDER
+867
+400
+1052
+433
+np-loss-percentage
+np-loss-percentage
+0
+10
+0.2
+0.1
+1
+%
+HORIZONTAL
+
+TEXTBOX
+508
+407
+523
+425
+21
+11
+0.0
+1
+
+TEXTBOX
+509
+447
+528
+466
+22
+11
+0.0
+1
+
+TEXTBOX
+1259
+233
+1275
+251
+23
+11
+0.0
+1
+
+PLOT
+929
+22
+1280
+233
+Fe on nanoparticles
+ticks
+Fe
+0.0
+10.0
+0.0
+10.0
+true
+true
+"" ""
+PENS
+"Fe2 on np" 1.0 0 -13345367 true "" "plot sum ([fe2-np] of nanoparticle)"
+"Fe3 on np" 1.0 0 -2674135 true "" "plot sum ([fe3-np] of nanoparticle)"
+
+PLOT
+769
+264
+971
+388
+Fe2-ratio of nanoparticles
+Fe2-ratio
+# nanoparticles
+0.0
+1.0
+0.0
+100.0
+true
+false
+"set-plot-pen-mode 1\nset-histogram-num-bars 20" "histogram [fe2-np / (fe2-np + fe3-np)] of nanoparticle"
+PENS
+"default" 1.0 0 -16777216 true "" "histogram [fe2-np / (fe2-np + fe3-np)] of nanoparticle"
+
+CHOOSER
+550
+394
+706
+439
+adhesion-strategy
+adhesion-strategy
+"electrostatic" "biofilm"
+0
+
+CHOOSER
+711
+394
+857
+439
+encrustation-strategy
+encrustation-strategy
+"shedding" "low pH"
+0
+
+PLOT
+976
+264
+1177
+388
+percentage adhering fe3reducer
+NIL
+NIL
+0.0
+10.0
+0.0
+1.0
+true
+false
+"" ""
+PENS
+"default" 1.0 0 -16777216 true "" "plot (count fe3reducer with [adhering? = True] / count fe3reducer)"
+
+@#$#@#$#@
+# ODD protocol
+
+The model description follows the ODD (Overview, Design concepts, Details) protocol (Grimm _et al._, 2006<sup>[1]</sup>; 2010<sup>[2]</sup>; 2020<sup>[3]</sup>)”.
+
+## 1. Purpose
+
+The purpose of the model is to provide a framework for testing the influence of different strategies and environmental conditions on the iron reduction/oxidation cycle maintained by two bacterial species. Additionally the model allows for the quick testing of explanatory hypotheses for observed real world phenomena.
+
+## 2. Entities, state variables, and scales
+
+The model distinguishes between three agents. All agents are placed at random medium patch locations at the beginning of the simulation.
+**fe3reducer** are bacteria capable of iron reduction. They have different surface areas (**surface-area**) drawn from a normal distribution with a mean of 8.3 * 10<sup>6</sup> nm<sup>2</sup>, according to Bonneville _et al._, 2006<sup>[4]</sup>, and a standard deviation of 1 * 10<sup>6</sup>. The variable **adhering?** states if they adhere to an iron mineral patch. **time-adhered** counts how long they have been adhering to this iron mineral patch and is only of importance for the biofilm adhesion strategy.
+**fe2oxidizer** are bacteria capable of iron oxidation.
+**nanoparticle** are the nanoparticles produced by the **fe2oxidizer**. They are characterized by their **diameter** in nm, their amount of Fe<sup>3+</sup> **fe3-np** in 10<sup>6</sup> atoms, and their amount of Fe<sup>2+</sup> **fe2-np** in 10<sup>6</sup> atoms. They can either adhere to bacteria or float in the medium.
+
+Two different patch types occur in the model.
+**Medium patches* are black and agents can move through those patches without restrictions.
+**Bulk mineral patches** are red and agents can only move on the edge patches (at least one of the 6-patch-neighborhood patches is a medium patch.). **fe2-ads** counts the amount of Fe<sup>2+</sup> adsorbed on the mineral surface.
+
+The smallest unit for time in the model (one tick) is equal to one minute. The edges of patches are 2 µm long, approximately the length of one bacterium. The model landscape comprised 42 x 42 µm. The system is either in an anoxic (oxygen is absent, reduction takes place.) or in an oxic (oxygen is present, oxidation takes place.) state. The times at which the model switches between those states are specified in a csv-file. The amount of Fe<sup>2+</sup> dissolved in the medium is counted by the global variable **fe2**.
+
+## 3. Process overview and scheduling
+
+-At the start of every iteration the model checks if it has to stop the simulation. This can either occur when the csv-file specifying the oxygen-profile arrived at its end or at a point of time determined by the user via **max-ticks**. 
+-Next, the oxygen status is switched as stated in the csv-file.
+-The agents move (first the nanoparticles, then the oxidizers, and at last the reducers) and adhere on surfaces or aggregate. The order of movement for every agent breed is chosen randomly, which is true for all processes unless stated otherwise.
+-If the system is in an anoxic state, reduction by the reducers takes place.
+-If the system is in an oxic state, oxidation takes place. First biological oxidation, then abiotic oxidation.
+-Now the nanoparticles dissociate from the corresponding bacteria if the requirements are met.
+-Next Fe<sup>2+</sup> is equilibrated between surfaces and solution.
+-At last, nanoparticles get lost from the system in a random manner.
+
+```
+to go
+  ;; Check if the criterion for ending the simulation is fulfilled (i. e. no values left in the csv-file).
+  if ((empty? oxygen-csv) = True or ticks = max-ticks) [ stop ]
+  switch-oxygen
+  movement
+  ;; If the environment is anoxic, allow for the reduction of iron by the fe3-reducer.
+  if oxygen? != True [
+    reduction
+  ]
+  ;; if the environment is oxic, allow for abiotic and biotic (fe2-oxidizer) oxidation.
+  if oxygen? = True [
+    biotic-oxidation
+    if (sum ([fe2-ads] of patches) + sum ([fe2-np] of nanoparticle) + fe2) > 0 [
+      abiotic-oxidation
+    ]
+  ]
+  dissociation
+  equilibrate
+  np-loss
+  set fe2-reporter ((sum([fe2-np] of nanoparticle)) + (sum ([fe2-ads] of (patches with [fe3? = True]))) + fe2)
+  tick
+end
+```
+## 4. Design concepts
+
+### 4.1 Basic principles
+
+The model explores the interdependencies between iron reducing and iron oxidizing bacteria. Under anoxic conditions iron reducing bacteria transform Fe<sup>3+</sup> to Fe<sup>2+</sup>. If oxygen is introduced to the system, iron oxidizing bacteria oxidize Fe<sup>2+</sup> back to Fe<sup>3+</sup>. This process is not symmetric though, as the nascent Fe<sup>3+</sup> produced by the iron oxidizing bacteria precipitates into nanoparticles. Nanoparticles are around two orders of magnitude faster reduced by iron reducing bacteria than bulk mineral. Therefor the two bacteria interact and influence the respiration efficiency of each other. This model implements the basic processes associated with iron oxidation/reduction by the corresponding bacteria. The purpose of this study is threefold. First, it predicts the effect of different environmental conditions on the performance of the system. Second, as the details of many bacterial strategies related are still under debate, the model allows for the selection of different hypothetic strategies (adhesion of the iron reducer, encrustation prevention strategy of the iron oxidizer) discussed between researchers and measures the difference between those strategies. At last, the model allows for the development and testing of hypotheses for the explanation of experimental phenomena.
+
+### 4.2 Emergence
+
+The number of nanoparticles is an example for an emerging output, as it is influenced by a multitude of different factors. Rising numbers of nanoparticles provide reducers with iron which is more accessible for reduction. On the other hand nanoparticles also bind excess Fe<sup>2+</sup> and thereby prevents reducers from detaching from their bulk mineral surface, which in turn reduces their capability to capture the nanoparticles by swimming in the medium. This influence on the effective reduction then causes a feedback on the production of nanoparticles as oxidizers are dependent on Fe<sup>2+</sup> produced by the reducers for nanoparticle production. This is further complicated by additional factors playing a role.
+
+### 4.3 Adaptation
+
+Reducers exhibit chemotaxis. If they are close to an iron patch they increase their velocity by the factor 2 and tumbling frequency by the factor 3 <sup>[5]</sup>.
+
+### 4.4 Objectives
+
+The agents do not pursue any objectives.
+
+### 4.5 Learning
+
+Over the course of a simulation, the agents do not learn.
+
+### 4.6 Prediction
+
+None of the agents make predictions about the future.
+
+### 4.7 Sensing
+
+Bacteria can sense the Fe<sup>2+</sup>- and Fe<sup>3+</sup>-content of nanoparticles. Reducers can further sense the adsorbed Fe<sup>2+</sup> on bulk mineral patches. The reducers base their decision to attach or detach from a bulk mineral patch/nanoparticle on its Fe<sup>2+</sup>-content. This is supposed to mimic electrostatic forces causing attraction or repulsion between the cell membrane and the mineral surface. Oxidizer can further sense the amount of nanoparticles on their surface. New nanoparticles start to precipitate on the surface upon oxidation if the number of nanoparticles attached to the oxidizer is below a threshold number.
+
+### 4.8 Interaction
+
+Reducer -> Reducer: With the biofilm adhesion mode, the close presence of other reducers on the same mineral cluster increases the adhesion of the reducer.
+
+Reducer -> oxidizer: Reducers provide the Fe<sup>2+</sup> oxidizers require for their respiration on oxygen.
+
+Reducer -> nanoparticle: Reducer bind nanoparticles upon contact and reduce their Fe<sup>3+</sup>-component. Upon reduction nanoparticles dissolve as Fe<sup>2+</sup> in contrast to Fe<sup>3+</sup> is water soluble.
+
+Oxidizer -> reducer: Oxidizers provide the Fe<sup>3+</sup> reducers require as a terminal electron acceptor for their respiration. Nanoparticles are more easily reduced than iron from bulk mineral processes.
+
+Oxidizer -> nanoparticles: Oxidizers produce nanoparticles upon precipitation of freshly produced Fe<sup>3+</sup>.
+
+Nanoparticles -> nanoparticles: Upon contact nanoparticles can aggregate to form larger nanoparticles.
+
+Nanoparticles -> reducers: Upon contact they can attach to reducers.
+
+Nanoparticles -> oxidizers: Nanoparticles accept the oxidized iron from oxidizers.
+
+### 4.9 Stochasticity
+
+Stochasticity is involved in the selection of the order individuals of an agent-breed perform actions. Nanoparticles aggregate upon contact with the probability mineral-aggregation-probability. Their release upon growth on the iron oxidizer is also to some extent randomly occuring around a certain shedding-diameter. Upon tumbling during movement the bacteria also change their orientation randomly.
+
+### 4.10 Collectives
+
+A bacteria and the nanoparticles bound on its surface can be regarded as a collective as they influence each other more closely. Their interactions are purely on a physicochemical basis though, and do not interfere with each others "strategy".
+
+### 4.11 Observation
+
+We were particularly interested in the Fe<sup>2+</sup>-profile over the course of a simulation as this is also measured in many experimental studies and therefor important for comparisons. We observed also the relative share of Fe<sup>2+</sup> adsorbed on bulk mineral, Fe<sup>2+</sup> on nanoparticles, and dissolved Fe<sup>2+</sup> on the total Fe<sup>2+</sup>-concentration, to get a better picture of the responsible processes for a particular Fe<sup>2+</sup>-profile.
+
+The number, diameter, and Fe<sup>2+</sup>-ratio of nanoparticles are observed as well.
+
+## 5. Initialization
+
+The first 10 variables and the two strategy selections are associated with the initialization of the model.
+
+**Variables**
+
+**1. fe-patch-percentage**: Defines how many percent of the total patches are bulk mineral patches.
+
+**2. fe-clustering**: Defines how many percent of the bulk mineral patches are attached to existing bulk mineral patches, after 1 - **fe-clustering** bulk mineral patches have been placed on the grid non-adjacent to each other.
+
+**3. initial-number-fe3reducer**: How many iron reducing bacteria does the simulation start with.
+
+**4. initial-number-fe2oxidizer**: How many iron oxidizing bacteria does the simulation start with.
+
+**5. initial-number-nanoparticle**: How many nanoparticles does the simulation start with.
+
+**6. max-ticks**: The maximum duration of the simulation.
+
+**7. speed-fe2oxidizer**: How fast the iron oxidizers move.
+
+**8. speed-fe3reducer**: How fast the iron reducers move.
+
+**9. iron-per-cubicnm**: How much iron (10<sup>6</sup> atoms) a nanoparticle with 1 nm diameter contains.
+
+Based on Hädrich _et al._ 2019 <sup>[6]</sup> the main minerals found are Lepidocrocite, Goethite, Ferryhydrite. 
+Lepidocrocite has a density of 4 g/cm³ (https://www.mindat.org/min-2379.html) and an iron content of ~63 %.
+An 1 nm nanoparticle has a volume of 1 * 10<sup>-18</sup> cm³ and accordingly weighs 
+4 * 10<sup>-18</sup> g. Of this the weight of iron is 2.52 * 10<sup>-18</sup> g which, based on its atomic mass of 55.85 g/mol amounts to ~4.5 * 10<sup>-20</sup> mol (or 27 100 atoms).
+
+**10. start-medium-fe2**: The amount of Fe<sup>2+</sup> (10<sup>6</sup> atoms) dissolved in the medium at the start of the simulation.
+
+
+**Strategies**:
+
+**adhesion-strategy (reducer)**: Either electrostatic (quick, flexible) or biofilm (long-term commitment).
+
+**encrustation-strategy (oxidizer)**: Either shedding (growth on the cell surface, detachment at around a critical shedding-diameter) or low pH (precipitation closely to the cell, immediately free-floating in the medium).
+
+## 6. Input data
+
+The model uses a csv-file for specifying the times at which the model switches between anoxic and oxic phases. The file has only one column and each row corresponds to one switching event. The model always starts with the anoxic phase per default. So the first row in the csv-file specifies the point in time (the unit is ticks, one tick corresponds to one minute), where a switch from the anoxic to the oxic phase takes place.
+
+## 7. Submodels
+
+### 7.1 Movement
+
+The movement submodel calls the nanoparticles not bound to any bacterium, the oxidizers, and the reducers in this order to manage their movement and adhesion.
+
+Free-floating nanoparticles: The nanoparticles exhibit diffusive movement with speed declining based on their diameter (max(50 - 0.5 * diameter, 1)). If the target patch is inaccessible to agents, which are patches in the core of a bulk mineral, _i. e._ surrounded only by bulk mineral patches in their neighborhood6,  the target patch is changed to the bulk iron mineral patch on the edge of the same mineral cluster closest to the nanoparticle. 
+Now, within the function for diffusive movement, if the caller is a nanoparticle, the function aggregate-adhere is called. This function manages the adhesion and aggregation of agents. 
+The nanoparticle which just moved now calls every other free-floating nanoparticle and reducer on the same patch in a random order. If the called agent is a free-floating nanoparticle and a random-number between 0 and 1 is smaller than **mineral-aggregation-probability**/100, the nanoparticles will aggregate, combining their iron contents and forming a new nanoparticle with a diameter corresponding to the combined amount of iron. If the called agent is a reducer, and the Fe<sup>3+</sup> to total iron ratio of the nanoparticle is above **np-attachment-threshold**, the nanoparticle will adhere to the reducer.
+
+Fe<sup>2+</sup>-oxidizers: The oxidizers exhibit diffusive movement as described for the nanoparticles. They move with the velocity of **speed-fe2oxidizer**. As their surface is near-neutral charged and shows a high degree of hydrophilicity to prevent encrustation <sup>[7]</sup>, we assume that oxidizers to neither adhere to bulk mineral nor nanoparticles, once they are released from the oxidizers cell surface after formation.
+
+Fe<sup>3+</sup>-reducers: For the reducers it is first checked if they adhere to a bulk mineral patch or not. If they don't adhere, they move via chemotaxis with the speed **speed-fe3reducer**. If they adhere and the adsorbed Fe<sup>2+</sup> on the mineral patch (**fe2-ads**) is higher than **fe2-ads-tolerance** they are either immediately released from the patch (adhesion-strategy: electrostatic) or with a certain probability which decreases with the time they already have been adhered to this patch and the presence of other bacteria on the mineral cluster in close proximity (adhesion-strategy: biofilm). Otherwise they just stay adhered to the mineral patch.
+Upon chemotactic movement it is first checked if they have a bulk-mineral patch as a neighbor. If so, then the chemotactic mode is switched on. In the chemotactic mode, the tumblings (which are random reorientations) are trippled and the speed is doubled. These numbers were determined by Harris _et al._ <sup>[5]</sup>. Despite of this adjustment, chemotactic movement works the same as diffusive movement already described for the nanoparticles.
+For the reducers, the function aggregate-adhered is also called. They can either bind nanoparticles they encounter or adhere to a bulk mineral patch. The binding of nanoparticles is identical to the process of nanoparticles adhering to reducers explained above. Adhesion on the mineral takes place if the reducer is located on a bulk mineral patch and **fe2-ads** < **fe2-ads-tolerance**.
+
+
+**Variables**:
+
+**11. mineral-aggregation-probability**: The kinetics of nanoparticle aggregation remain unclear. Bose _et al._ 2009 <sup>[8]</sup> showed for example that hematite nanoparticles tend to aggregate in solution if their diameter is either 11 or 99 nm, whereas their tendency to do so is much weaker if they have a diameter of 30 or 43 nm. We therefor just assume a mineral-aggregation-probability of 100 %. For lower pH we assume a drop in mineral-aggregation-probability as the nanoparticles get more positively charged and the electrostatics repulsion between them gets stronger accordingly. This decrease has been quantified by Baalousha 2009 <sup>[9]</sup>.
+
+**13. fe2-ads-tolerance**: The situation is similar for the tolerance of Fe<sup>2+</sup> adsorbed on bulk mineral for the iron reducer. At some point the electrostatic repulsion and the accumulation of an iron redox-state which is not useable for the reducers respiration has to make him detach from the mineral. Though we can not directly measure this parameter, Roberts _et al._ <sup>[10]</sup> have shown that at neutral pH around 20 % of the bacteria adhere to the mineral. We fitted the parameter so that during the course of an experiment it causes approximately the same percentage of iron reducers to attach to the surface. We arrived at a value of 300.
+
+**16. np-attachment-threshold**: The information here is also unreliable and was just guessed to be around 50 %. However, the sensitivity analysis in our paper explores the relative importance of these unclear parameters.
+
+
+### 7.2 Reduction
+
+The reduction submodel is called under anoxic conditions and manages all the reduction processes of the reducer, which include bulk mineral reduction, nanoparticle reduction, and non-contact-dependent reduction via electron-shuttles.
+
+If the reducer is attached to a bulk mineral patch it adds an amount of **contact-reduction-rate** to the Fe<sup>2+</sup> adsorbed on the mineral patch (**fe2-ads**).
+
+Then the remaining reduction-capacity is set to four times the **contact-reduction-rate**. This is based on the results of Marsili _et al._ 2008 <sup>[10]</sup> who showed that around 80 % of _Shewanellas_ reduction occurs via electron shuttles. In their study they did not include nanoparticles. As nanoparticles bind to the membrane protein responsible for reduction, MtrC, which are also responsible for recharging the electron-shuttles, they draw from the same resource, _i. e._ our reduction-capacity variable. First all bound nanoparticles with any Fe<sup>3+</sup> are reduced. Based on their diameter they occupy a certain share of MtrC on the cell surface. Bonneville _et al._ 2006 <sup>[11]</sup> showed that there are around 10000 of these MtrC-proteins on the cell surface. We assume they are equally distributed, so that the amount of MtrC occupied by one nanoparticle is its squared diameter over the cells surface area times 10000. The amount of Fe<sup>3+</sup> reduced is then equal to the number of occupied MtrC divided by the total of MtrC of the cell times the **np-mineral-reduction-ratio** times the **condact-reduction-rate**. The transferred electrons divided by the **np-mineral-reduction-ratio** is then substracted from the reduction-capacity pool.
+
+The remaining reduction-capacity is then equally distributed on bulk mineral patches within a certain distance **e-shuttle-range**.
+
+
+**Variables**:
+
+**12. contact-reduction-rate**: From the cell densities and reduction rate reported in Lies _et al. 2005 <sup>[12]</sup>, one can easily calculate the reduction rate per cell. It amounts to 5 * 10<sup>7</sup> atoms per cell per min for _Shewanella_ and Fe<sup>3+</sup>-hydroxide. The study includes electron-shuttle reduction. As Marsili _et al._ 2008 <sup>[10]</sup> showed that around 80 % of _Shewanellas_ reduction occurs via electron shuttles, for obtaining the **contact-reduction-rate** we have to divide by five. We therefor get a value of 1 * 10<sup>7</sup> atoms per cell per min.
+
+**13. np-mineral-reduction-rate**: According to Bosch _et al._ 2010 <sup>[13]</sup> the reduction ratio of macroparticles was 6 to 70 pmol/(cell*h) compared to up to 1255 pmol/(cell*h) for nanoparticles depending on the particular mineral. This was determined for Geobacter though. Normalized by surface area the improvement in reduction rates is approximately two orders of magnitude. We therefore asume a value of 100.
+
+**20. e-shuttle-range**: The e-shuttle-range heavily depends on environmental conditions and has to our knowledge not been experimentally determined for any case study yet. As there is plenty of evidence for non-contact dependent reduction and our model should cover this process, we went for an arbitrary range of 10 patch lengths, which equals to 20 µm. 
+
+
+### 7.3 Biotic oxidation
+
+During biotic oxidation the oxidizer lets new nanoparticles precipitate and grow. There are two possible strategies considered. Either the oxidizer lets nanoparticles precipitate on its cell surface and they grow up to a certain size (**shedding**), or they precipitate in close proximity to the cell and are immediately free-floating (**low pH**).
+
+The oxidizer either oxidizes his equal share on the total amount of dissolved Fe<sup>2+</sup> or an amount equal to **contact-oxidation-rate**, whichever value is lower. This variable is called fe2-used-from-medium.
+
+**shedding**: If the oxidizer has less than 40 nanoparticles on its cell surface, it grows as many nanoparticle as it needs to reach 40 nanoparticles. The amount of Fe<sup>2+</sup> spend on each nanoparticle is fe2-used-from-medium / 40. The spend Fe<sup>2+</sup> is substracted from fe2-used-from-medium and the remaining Fe<sup>2+</sup> is spend on all the nanoparticles on the cell surface based on their share of the total surface area occupied by nanoparticles (so larger nanoparticles get oxidized and therefor grow faster.).
+
+**low pH**: If on none of the surrounding patches nanoparticles are present, all fe2-used-from-medium is consumed to form a new nanoparticle on the same patch as the oxidizer. In contrast to the nanoparticles produced with the shedding strategy, these nanoparticles are not bound to the oxidizer and can freely move from the moment of their formation. If nanoparticles exist on the surrounding patches, the fe2-used-from-medium is equally distributed among all these nanoparticles.
+
+
+**Variables**:
+
+**22. contact-oxidation-rate**: Maisch _et al._ 2019 <sup>14</sup> measured a maximum biological oxidation rate of 3.6 * 10<sup>7</sup> Fe<sup>2+</sup> per cell per min.
+
+
+### 7.4 Abiotic oxidation
+
+Abiotic iron oxidation follows first order kinetics in regard to the concentration of Fe<sup>2+</sup> <sup>[15]</sup>. That means a constant share of the total iron **abiotic-oxidation-ratio** is oxidized each tick as long as the other relevant concentrations (oxygen, protons) do not change. This share of iron gets substracted from the dissolved Fe<sup>2+</sup>, the Fe<sup>2+</sup> on the bulk mineral surface, and the nanoparticle-Fe<sup>2+</sup>.
+
+
+**Variables**:
+
+**15. abiotic-oxidation-ratio**: Druschel _et al._ 2008 <sup>[16]</sup> have measured that the contribution of biotic oxidation to the total iron oxidation (biotic + abiotic) under biologically relevant oxygen concentrations ranges from around 20 to up to 90 %. We used this is a rough estimate to calibrate the value for this parameter. A value of 0.01 results in a contribution of biotic oxidation to total iron oxidation of 20 %. This value we chose for near neutral pH. For lower pH we have to assume lower values, where the biotic oxidation contributes up to around 70 % (for an **abiotic-oxidation-ratio** of 0.001.).
+
+
+### 7.5 Dissociation
+
+This submodel manages the dissociation of nanoparticles from bacteria.
+
+reducer: If the partner is a reducer, the nanoparticle dissociates once the Fe<sup>2+</sup>-content gets above **np-dissociation-threshold**.
+
+oxidizer: If the partner is an oxidizer the nanoparticle dissociates once a random-number thrown from a distribution with a mean of the nanoparticle diameter and a standard-deviation of 2 is bigger, than the **shedding-parameter**. This element of stochasticity was added, because it is unrealistic to assume that every nanoparticle exactly dissociates at a size corresponding to the **shedding-parameter**.
+
+
+**Variables**:
+
+**17. np-dissociation-threshold**: As already mentioned earlier, when nanoparticles dissociate from the researcher has not been quantitatively studied yet. We therefore arbitrarily chose a value of 0.7 and check its influence in our sensitivity analysis.
+
+**18. shedding.diameter**: Hädrich _et al._ 2019 <sup>[6]</sup> measured the average diameter of nanoparticles in an environment characteristic for _Sideroxydans_ to be 10 nm. Therefor we selected this value for the shedding-diameter.
+
+
+### 7.6 Equilibrate:
+
+This submodel manages the distribution adjustments of Fe<sup>2+</sup> between bulk mineral, solution, and nanoparticles.
+
+First the equilibration between bulk mineral patches and solution takes place. The bulk mineral patches are selected in random order. The difference between the actual adhered Fe<sup>2+</sup> and the equilibrium-share **fe2-solid-ineq** is calculated. Then a fraction **fe2-equilibrium-rate** of Fe<sup>2+</sup> is transferred in the direction of the equilibrium (either patch -> solution or solution -> patch.). **fe2-equilibrium-rate** defines how fast Fe<sup>2+</sup> equilibrates.
+
+Afterwards nanoparticles and solution are equilibrated according to the same principle.
+
+
+**Variables**:
+
+**19. fe2-equilibrium-rate**: Hyacinthe _et al._ 2008 <sup>[17]</sup> showed that complete equilibration takes place within 2.5 h. We therefor calculated our **fe2-equilibrium-rate** to the minimum value that assures that less than 5 % of the initial deviation from equilibrium remains after 2.5 h. The corresponding value is 0.02.
+
+**21. fe2-solid-ineq**: From Fe<sup>2+</sup>-distributions recorded by Wilmoth _et al._ 2018 <sup>[18]</sup> we estimated a value of 0.9.
+
+
+### 7.7 np-loss
+
+A certain share of nanoparticles gets lost each tick to simulate processes such as sedimentation, incorporation into bulk mineral, etc. There can be no general value for the **np-loss-percentage** due to the complex variations in different environments. We went for 0.2, although in experimental set ups, which are closed systems most of the time, a lower value might be closer to reality. For the validation of our hypothesis explaining an experimental pattern, we set this value to zero.
+
+## REFERENCES
+
+<sup>[1]</sup> Grimm, V., Berger, U., Bastiansen, F., Eliassen, S., Ginot, V., Giske, J., Goss-Custard, J., Grand, T., Heinz, S., Huse, G., Huth, A., Jepsen, J. U., Jørgensen, C., Mooij, W. M., Müller, B., Pe'er, G., Piou, C., Railsback, S. F., Robbins, A. M., Robbins, M. M., Rossmanith, E., Rüger, N., Strand, E., Souissi, S., Stillman, R. A., Vabø, R., Visser, U., DeAngelis, D. L., 2006. A standard protocol for describing individual-based and agent-based models. Ecological Modelling 198, 115-126.
+
+<sup>[2]</sup> Grimm, V., Berger, U., DeAngelis, D. L., Polhill, J. G., Giske, J. & Railsback, S. F. (2010). The ODD protocol: A review and first update. Ecological Modelling, 221(23), 2760–2768.
+
+<sup>[3]</sup> Grimm, Volker, et al. The ODD protocol for describing agent-based and other simulation models: A second update to improve clarity, replication, and structural realism. Journal of Artificial Societies and Social Simulation 23.2 (2020).
+
+<sup>[4]</sup> Bonneville, Steeve, et al. Reduction of Fe (III) colloids by Shewanella putrefaciens: a kinetic model. _Geochimica et cosmochimica acta_ 70.23 (2006): 5842-5854.
+
+<sup>[5]</sup> Harris, H. Wayne, Mohamed Y. El-Naggar, and Kenneth H. Nealson. Shewanella oneidensis MR-1 chemotaxis proteins and electron-transport chain components essential for congregation near insoluble electron acceptors. (2012): 1167-1177.
+
+<sup>[6]</sup> Hädrich, Anke, et al. Microbial Fe (II) oxidation by Sideroxydans lithotrophicus ES-1 in the presence of Schlöppnerbrunnen fen-derived humic acids. FEMS microbiology ecology 95.4 (2019): fiz034.
+
+<sup>[7]</sup> Saini, G., and C. S. Chan. Near-neutral surface charge and hydrophilicity prevent mineral encrustation of Fe-oxidizing microorganisms. Geobiology 11.2 (2013): 191-200.
+
+<sup>[8]</sup> Bose, Saumyaditya, et al. Bioreduction of hematite nanoparticles by the dissimilatory iron reducing bacterium Shewanella oneidensis MR-1. Geochimica et Cosmochimica Acta 73.4 (2009): 962-976.
+
+<sup>[9]</sup> Baalousha, Mohammed. Aggregation and disaggregation of iron oxide nanoparticles: Influence of particle concentration, pH and natural organic matter. Science of the total Environment 407.6 (2009): 2093-2101.
+
+<sup>[10]</sup> Marsili, Enrico, et al. Shewanella secretes flavins that mediate extracellular electron transfer. Proceedings of the National Academy of Sciences 105.10 (2008): 3968-3973.
+
+<sup>[11]</sup> Bonneville, Steeve, et al. Reduction of Fe (III) colloids by Shewanella putrefaciens: a kinetic model. Geochimica et cosmochimica acta 70.23 (2006): 5842-5854.
+
+<sup>[12]</sup> Lies, Douglas P., et al. Shewanella oneidensis MR-1 uses overlapping pathways for iron reduction at a distance and by direct contact under conditions relevant for biofilms. Applied and environmental microbiology 71.8 (2005): 4414-4426.
+
+<sup>[13]</sup> Bosch, Julian, et al. Nanosized iron oxide colloids strongly enhance microbial iron reduction. Applied and environmental microbiology 76.1 (2010): 184-189.
+
+<sup>[14]</sup> Maisch, Markus, et al. Contribution of microaerophilic iron (II)-oxidizers to iron (III) mineral formation. Environmental science & technology 53.14 (2019): 8197-8204.
+
+<sup>[15]</sup> W. Stumm, J. J. Morgan, Aquatic chemistry: Chemical equilibria and rates in natural waters, Vol. 126, John Wiley & Sons,2012.
+
+<sup>[16]</sup> Druschel, Gregory K., et al. "Low-oxygen and chemical kinetic constraints on the geochemical niche of neutrophilic iron (II) oxidizing microorganisms." Geochimica et Cosmochimica Acta 72.14 (2008): 3358-3370.
+
+<sup>[17]</sup> Hyacinthe, Christelle, Steeve Bonneville, and Philippe Van Cappellen. Effect of sorbed Fe (II) on the initial reduction kinetics of 6-line ferrihydrite and amorphous ferric phosphate by Shewanella putrefaciens. Geomicrobiology journal 25.3-4 (2008): 181-192.
+
+<sup>[18]</sup> Wilmoth, Jared Lee, Mary Ann Moran, and Aaron Thompson. Transient O 2 pulses direct Fe crystallinity and Fe (III)-reducer gene expression within a soil microbiome. Microbiome 6.1 (2018): 1-14.
+@#$#@#$#@
+default
+true
+0
+Polygon -7500403 true true 150 5 40 250 150 205 260 250
+
+airplane
+true
+0
+Polygon -7500403 true true 150 0 135 15 120 60 120 105 15 165 15 195 120 180 135 240 105 270 120 285 150 270 180 285 210 270 165 240 180 180 285 195 285 165 180 105 180 60 165 15
+
+arrow
+true
+0
+Polygon -7500403 true true 150 0 0 150 105 150 105 293 195 293 195 150 300 150
+
+bacteria
+false
+0
+Polygon -7500403 true true 90 180 90 195 90 210 105 240 135 255 165 255 195 240 210 210 210 180 270 195 210 180 150 180
+Polygon -7500403 true true 90 180 90 90 105 60 135 45 165 45 195 60 210 90 210 180 150 180
+
+box
+false
+0
+Polygon -7500403 true true 150 285 285 225 285 75 150 135
+Polygon -7500403 true true 150 135 15 75 150 15 285 75
+Polygon -7500403 true true 15 75 15 225 150 285 150 135
+Line -16777216 false 150 285 150 135
+Line -16777216 false 150 135 15 75
+Line -16777216 false 150 135 285 75
+
+bug
+true
+0
+Circle -7500403 true true 96 182 108
+Circle -7500403 true true 110 127 80
+Circle -7500403 true true 110 75 80
+Line -7500403 true 150 100 80 30
+Line -7500403 true 150 100 220 30
+
+butterfly
+true
+0
+Polygon -7500403 true true 150 165 209 199 225 225 225 255 195 270 165 255 150 240
+Polygon -7500403 true true 150 165 89 198 75 225 75 255 105 270 135 255 150 240
+Polygon -7500403 true true 139 148 100 105 55 90 25 90 10 105 10 135 25 180 40 195 85 194 139 163
+Polygon -7500403 true true 162 150 200 105 245 90 275 90 290 105 290 135 275 180 260 195 215 195 162 165
+Polygon -16777216 true false 150 255 135 225 120 150 135 120 150 105 165 120 180 150 165 225
+Circle -16777216 true false 135 90 30
+Line -16777216 false 150 105 195 60
+Line -16777216 false 150 105 105 60
+
+car
+false
+0
+Polygon -7500403 true true 300 180 279 164 261 144 240 135 226 132 213 106 203 84 185 63 159 50 135 50 75 60 0 150 0 165 0 225 300 225 300 180
+Circle -16777216 true false 180 180 90
+Circle -16777216 true false 30 180 90
+Polygon -16777216 true false 162 80 132 78 134 135 209 135 194 105 189 96 180 89
+Circle -7500403 true true 47 195 58
+Circle -7500403 true true 195 195 58
+
+circle
+false
+0
+Circle -7500403 true true 0 0 300
+
+circle 2
+false
+0
+Circle -7500403 true true 0 0 300
+Circle -16777216 true false 30 30 240
+
+cow
+false
+0
+Polygon -7500403 true true 200 193 197 249 179 249 177 196 166 187 140 189 93 191 78 179 72 211 49 209 48 181 37 149 25 120 25 89 45 72 103 84 179 75 198 76 252 64 272 81 293 103 285 121 255 121 242 118 224 167
+Polygon -7500403 true true 73 210 86 251 62 249 48 208
+Polygon -7500403 true true 25 114 16 195 9 204 23 213 25 200 39 123
+
+cylinder
+false
+0
+Circle -7500403 true true 0 0 300
+
+dot
+false
+0
+Circle -7500403 true true 90 90 120
+
+face happy
+false
+0
+Circle -7500403 true true 8 8 285
+Circle -16777216 true false 60 75 60
+Circle -16777216 true false 180 75 60
+Polygon -16777216 true false 150 255 90 239 62 213 47 191 67 179 90 203 109 218 150 225 192 218 210 203 227 181 251 194 236 217 212 240
+
+face neutral
+false
+0
+Circle -7500403 true true 8 7 285
+Circle -16777216 true false 60 75 60
+Circle -16777216 true false 180 75 60
+Rectangle -16777216 true false 60 195 240 225
+
+face sad
+false
+0
+Circle -7500403 true true 8 8 285
+Circle -16777216 true false 60 75 60
+Circle -16777216 true false 180 75 60
+Polygon -16777216 true false 150 168 90 184 62 210 47 232 67 244 90 220 109 205 150 198 192 205 210 220 227 242 251 229 236 206 212 183
+
+fish
+false
+0
+Polygon -1 true false 44 131 21 87 15 86 0 120 15 150 0 180 13 214 20 212 45 166
+Polygon -1 true false 135 195 119 235 95 218 76 210 46 204 60 165
+Polygon -1 true false 75 45 83 77 71 103 86 114 166 78 135 60
+Polygon -7500403 true true 30 136 151 77 226 81 280 119 292 146 292 160 287 170 270 195 195 210 151 212 30 166
+Circle -16777216 true false 215 106 30
+
+flag
+false
+0
+Rectangle -7500403 true true 60 15 75 300
+Polygon -7500403 true true 90 150 270 90 90 30
+Line -7500403 true 75 135 90 135
+Line -7500403 true 75 45 90 45
+
+flower
+false
+0
+Polygon -10899396 true false 135 120 165 165 180 210 180 240 150 300 165 300 195 240 195 195 165 135
+Circle -7500403 true true 85 132 38
+Circle -7500403 true true 130 147 38
+Circle -7500403 true true 192 85 38
+Circle -7500403 true true 85 40 38
+Circle -7500403 true true 177 40 38
+Circle -7500403 true true 177 132 38
+Circle -7500403 true true 70 85 38
+Circle -7500403 true true 130 25 38
+Circle -7500403 true true 96 51 108
+Circle -16777216 true false 113 68 74
+Polygon -10899396 true false 189 233 219 188 249 173 279 188 234 218
+Polygon -10899396 true false 180 255 150 210 105 210 75 240 135 240
+
+house
+false
+0
+Rectangle -7500403 true true 45 120 255 285
+Rectangle -16777216 true false 120 210 180 285
+Polygon -7500403 true true 15 120 150 15 285 120
+Line -16777216 false 30 120 270 120
+
+leaf
+false
+0
+Polygon -7500403 true true 150 210 135 195 120 210 60 210 30 195 60 180 60 165 15 135 30 120 15 105 40 104 45 90 60 90 90 105 105 120 120 120 105 60 120 60 135 30 150 15 165 30 180 60 195 60 180 120 195 120 210 105 240 90 255 90 263 104 285 105 270 120 285 135 240 165 240 180 270 195 240 210 180 210 165 195
+Polygon -7500403 true true 135 195 135 240 120 255 105 255 105 285 135 285 165 240 165 195
+
+line
+true
+0
+Line -7500403 true 150 0 150 300
+
+line half
+true
+0
+Line -7500403 true 150 0 150 150
+
+pentagon
+false
+0
+Polygon -7500403 true true 150 15 15 120 60 285 240 285 285 120
+
+person
+false
+0
+Circle -7500403 true true 110 5 80
+Polygon -7500403 true true 105 90 120 195 90 285 105 300 135 300 150 225 165 300 195 300 210 285 180 195 195 90
+Rectangle -7500403 true true 127 79 172 94
+Polygon -7500403 true true 195 90 240 150 225 180 165 105
+Polygon -7500403 true true 105 90 60 150 75 180 135 105
+
+plant
+false
+0
+Rectangle -7500403 true true 135 90 165 300
+Polygon -7500403 true true 135 255 90 210 45 195 75 255 135 285
+Polygon -7500403 true true 165 255 210 210 255 195 225 255 165 285
+Polygon -7500403 true true 135 180 90 135 45 120 75 180 135 210
+Polygon -7500403 true true 165 180 165 210 225 180 255 120 210 135
+Polygon -7500403 true true 135 105 90 60 45 45 75 105 135 135
+Polygon -7500403 true true 165 105 165 135 225 105 255 45 210 60
+Polygon -7500403 true true 135 90 120 45 150 15 180 45 165 90
+
+sheep
+false
+15
+Circle -1 true true 203 65 88
+Circle -1 true true 70 65 162
+Circle -1 true true 150 105 120
+Polygon -7500403 true false 218 120 240 165 255 165 278 120
+Circle -7500403 true false 214 72 67
+Rectangle -1 true true 164 223 179 298
+Polygon -1 true true 45 285 30 285 30 240 15 195 45 210
+Circle -1 true true 3 83 150
+Rectangle -1 true true 65 221 80 296
+Polygon -1 true true 195 285 210 285 210 240 240 210 195 210
+Polygon -7500403 true false 276 85 285 105 302 99 294 83
+Polygon -7500403 true false 219 85 210 105 193 99 201 83
+
+square
+false
+0
+Rectangle -7500403 true true 30 30 270 270
+
+square 2
+false
+0
+Rectangle -7500403 true true 30 30 270 270
+Rectangle -16777216 true false 60 60 240 240
+
+star
+false
+0
+Polygon -7500403 true true 151 1 185 108 298 108 207 175 242 282 151 216 59 282 94 175 3 108 116 108
+
+target
+false
+0
+Circle -7500403 true true 0 0 300
+Circle -16777216 true false 30 30 240
+Circle -7500403 true true 60 60 180
+Circle -16777216 true false 90 90 120
+Circle -7500403 true true 120 120 60
+
+tree
+false
+0
+Circle -7500403 true true 118 3 94
+Rectangle -6459832 true false 120 195 180 300
+Circle -7500403 true true 65 21 108
+Circle -7500403 true true 116 41 127
+Circle -7500403 true true 45 90 120
+Circle -7500403 true true 104 74 152
+
+triangle
+false
+0
+Polygon -7500403 true true 150 30 15 255 285 255
+
+triangle 2
+false
+0
+Polygon -7500403 true true 150 30 15 255 285 255
+Polygon -16777216 true false 151 99 225 223 75 224
+
+truck
+false
+0
+Rectangle -7500403 true true 4 45 195 187
+Polygon -7500403 true true 296 193 296 150 259 134 244 104 208 104 207 194
+Rectangle -1 true false 195 60 195 105
+Polygon -16777216 true false 238 112 252 141 219 141 218 112
+Circle -16777216 true false 234 174 42
+Rectangle -7500403 true true 181 185 214 194
+Circle -16777216 true false 144 174 42
+Circle -16777216 true false 24 174 42
+Circle -7500403 false true 24 174 42
+Circle -7500403 false true 144 174 42
+Circle -7500403 false true 234 174 42
+
+turtle
+true
+0
+Polygon -10899396 true false 215 204 240 233 246 254 228 266 215 252 193 210
+Polygon -10899396 true false 195 90 225 75 245 75 260 89 269 108 261 124 240 105 225 105 210 105
+Polygon -10899396 true false 105 90 75 75 55 75 40 89 31 108 39 124 60 105 75 105 90 105
+Polygon -10899396 true false 132 85 134 64 107 51 108 17 150 2 192 18 192 52 169 65 172 87
+Polygon -10899396 true false 85 204 60 233 54 254 72 266 85 252 107 210
+Polygon -7500403 true true 119 75 179 75 209 101 224 135 220 225 175 261 128 261 81 224 74 135 88 99
+
+wheel
+false
+0
+Circle -7500403 true true 3 3 294
+Circle -16777216 true false 30 30 240
+Line -7500403 true 150 285 150 15
+Line -7500403 true 15 150 285 150
+Circle -7500403 true true 120 120 60
+Line -7500403 true 216 40 79 269
+Line -7500403 true 40 84 269 221
+Line -7500403 true 40 216 269 79
+Line -7500403 true 84 40 221 269
+
+wolf
+false
+0
+Polygon -16777216 true false 253 133 245 131 245 133
+Polygon -7500403 true true 2 194 13 197 30 191 38 193 38 205 20 226 20 257 27 265 38 266 40 260 31 253 31 230 60 206 68 198 75 209 66 228 65 243 82 261 84 268 100 267 103 261 77 239 79 231 100 207 98 196 119 201 143 202 160 195 166 210 172 213 173 238 167 251 160 248 154 265 169 264 178 247 186 240 198 260 200 271 217 271 219 262 207 258 195 230 192 198 210 184 227 164 242 144 259 145 284 151 277 141 293 140 299 134 297 127 273 119 270 105
+Polygon -7500403 true true -1 195 14 180 36 166 40 153 53 140 82 131 134 133 159 126 188 115 227 108 236 102 238 98 268 86 269 92 281 87 269 103 269 113
+
+x
+false
+0
+Polygon -7500403 true true 270 75 225 30 30 225 75 270
+Polygon -7500403 true true 30 75 75 30 270 225 225 270
+@#$#@#$#@
+NetLogo 3D 6.0.4
+@#$#@#$#@
+need-to-manually-make-preview-for-this-model
+@#$#@#$#@
+@#$#@#$#@
+<experiments>
+  <experiment name="pH_7" repetitions="20" runMetricsEveryStep="true">
+    <setup>setup</setup>
+    <go>go</go>
+    <metric>(sum([fe2-np] of nanoparticle)) + (sum ([fe2-ads] of (patches with [fe3? = True]))) + fe2</metric>
+    <metric>sum ([fe2-np] of nanoparticle)</metric>
+    <metric>fe2</metric>
+    <metric>sum ([fe2-ads] of (patches with [fe3? = True]))</metric>
+    <metric>sum ([fe3-np] of nanoparticle)</metric>
+    <metric>count nanoparticle</metric>
+    <metric>mean [diameter] of nanoparticle</metric>
+    <metric>standard-deviation [diameter] of nanoparticle</metric>
+    <metric>mean [fe2-np / (fe2-np + fe3-np)] of nanoparticle</metric>
+    <metric>standard-deviation [fe2-np / (fe2-np + fe3-np)] of nanoparticle</metric>
+    <metric>(count (fe3reducer with [adhering? = True])) / (count fe3reducer)</metric>
+    <metric>mean [count my-links] of fe3reducer</metric>
+    <metric>standard-deviation [count my-links] of fe3reducer</metric>
+    <enumeratedValueSet variable="mineral-aggregation-probability">
+      <value value="100"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="abiotic-oxidation-ratio">
+      <value value="0.01"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="fe2-ads-tolerance">
+      <value value="250"/>
+    </enumeratedValueSet>
+  </experiment>
+  <experiment name="pH_6" repetitions="20" runMetricsEveryStep="true">
+    <setup>setup</setup>
+    <go>go</go>
+    <metric>(sum([fe2-np] of nanoparticle)) + (sum ([fe2-ads] of (patches with [fe3? = True]))) + fe2</metric>
+    <metric>sum ([fe2-np] of nanoparticle)</metric>
+    <metric>fe2</metric>
+    <metric>sum ([fe2-ads] of (patches with [fe3? = True]))</metric>
+    <metric>sum ([fe3-np] of nanoparticle)</metric>
+    <metric>count nanoparticle</metric>
+    <metric>mean [diameter] of nanoparticle</metric>
+    <metric>standard-deviation [diameter] of nanoparticle</metric>
+    <metric>mean [fe2-np / (fe2-np + fe3-np)] of nanoparticle</metric>
+    <metric>standard-deviation [fe2-np / (fe2-np + fe3-np)] of nanoparticle</metric>
+    <metric>(count (fe3reducer with [adhering? = True])) / (count fe3reducer)</metric>
+    <metric>mean [count my-links] of fe3reducer</metric>
+    <metric>standard-deviation [count my-links] of fe3reducer</metric>
+    <enumeratedValueSet variable="mineral-aggregation-probability">
+      <value value="20"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="abiotic-oxidation-ratio">
+      <value value="0.008"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="fe2-ads-tolerance">
+      <value value="250"/>
+    </enumeratedValueSet>
+  </experiment>
+  <experiment name="pH_5" repetitions="20" runMetricsEveryStep="true">
+    <setup>setup</setup>
+    <go>go</go>
+    <metric>(sum([fe2-np] of nanoparticle)) + (sum ([fe2-ads] of (patches with [fe3? = True]))) + fe2</metric>
+    <metric>sum ([fe2-np] of nanoparticle)</metric>
+    <metric>fe2</metric>
+    <metric>sum ([fe2-ads] of (patches with [fe3? = True]))</metric>
+    <metric>sum ([fe3-np] of nanoparticle)</metric>
+    <metric>count nanoparticle</metric>
+    <metric>mean [diameter] of nanoparticle</metric>
+    <metric>standard-deviation [diameter] of nanoparticle</metric>
+    <metric>mean [fe2-np / (fe2-np + fe3-np)] of nanoparticle</metric>
+    <metric>standard-deviation [fe2-np / (fe2-np + fe3-np)] of nanoparticle</metric>
+    <metric>(count (fe3reducer with [adhering? = True])) / (count fe3reducer)</metric>
+    <metric>mean [count my-links] of fe3reducer</metric>
+    <metric>standard-deviation [count my-links] of fe3reducer</metric>
+    <enumeratedValueSet variable="mineral-aggregation-probability">
+      <value value="1"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="abiotic-oxidation-ratio">
+      <value value="0.001"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="fe2-ads-tolerance">
+      <value value="1000"/>
+    </enumeratedValueSet>
+  </experiment>
+  <experiment name="Comb1" repetitions="20" runMetricsEveryStep="true">
+    <setup>setup</setup>
+    <go>go</go>
+    <metric>(sum([fe2-np] of nanoparticle)) + (sum ([fe2-ads] of (patches with [fe3? = True]))) + fe2</metric>
+    <metric>sum ([fe2-np] of nanoparticle)</metric>
+    <metric>fe2</metric>
+    <metric>sum ([fe2-ads] of (patches with [fe3? = True]))</metric>
+    <metric>sum ([fe3-np] of nanoparticle)</metric>
+    <metric>count nanoparticle</metric>
+    <metric>mean [diameter] of nanoparticle</metric>
+    <metric>standard-deviation [diameter] of nanoparticle</metric>
+    <metric>mean [fe2-np / (fe2-np + fe3-np)] of nanoparticle</metric>
+    <metric>standard-deviation [fe2-np / (fe2-np + fe3-np)] of nanoparticle</metric>
+    <metric>(count (fe3reducer with [adhering? = True])) / (count fe3reducer)</metric>
+    <metric>mean [count my-links] of fe3reducer</metric>
+    <metric>standard-deviation [count my-links] of fe3reducer</metric>
+    <enumeratedValueSet variable="adhesion-strategy">
+      <value value="&quot;electrostatic&quot;"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="encrustation-strategy">
+      <value value="&quot;shedding&quot;"/>
+    </enumeratedValueSet>
+  </experiment>
+  <experiment name="Comb2" repetitions="20" runMetricsEveryStep="true">
+    <setup>setup</setup>
+    <go>go</go>
+    <metric>(sum([fe2-np] of nanoparticle)) + (sum ([fe2-ads] of (patches with [fe3? = True]))) + fe2</metric>
+    <metric>sum ([fe2-np] of nanoparticle)</metric>
+    <metric>fe2</metric>
+    <metric>sum ([fe2-ads] of (patches with [fe3? = True]))</metric>
+    <metric>sum ([fe3-np] of nanoparticle)</metric>
+    <metric>count nanoparticle</metric>
+    <metric>mean [diameter] of nanoparticle</metric>
+    <metric>standard-deviation [diameter] of nanoparticle</metric>
+    <metric>mean [fe2-np / (fe2-np + fe3-np)] of nanoparticle</metric>
+    <metric>standard-deviation [fe2-np / (fe2-np + fe3-np)] of nanoparticle</metric>
+    <metric>(count (fe3reducer with [adhering? = True])) / (count fe3reducer)</metric>
+    <metric>mean [count my-links] of fe3reducer</metric>
+    <metric>standard-deviation [count my-links] of fe3reducer</metric>
+    <enumeratedValueSet variable="adhesion-strategy">
+      <value value="&quot;electrostatic&quot;"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="encrustation-strategy">
+      <value value="&quot;low pH&quot;"/>
+    </enumeratedValueSet>
+  </experiment>
+  <experiment name="Comb3" repetitions="20" runMetricsEveryStep="true">
+    <setup>setup</setup>
+    <go>go</go>
+    <metric>(sum([fe2-np] of nanoparticle)) + (sum ([fe2-ads] of (patches with [fe3? = True]))) + fe2</metric>
+    <metric>sum ([fe2-np] of nanoparticle)</metric>
+    <metric>fe2</metric>
+    <metric>sum ([fe2-ads] of (patches with [fe3? = True]))</metric>
+    <metric>sum ([fe3-np] of nanoparticle)</metric>
+    <metric>count nanoparticle</metric>
+    <metric>mean [diameter] of nanoparticle</metric>
+    <metric>standard-deviation [diameter] of nanoparticle</metric>
+    <metric>mean [fe2-np / (fe2-np + fe3-np)] of nanoparticle</metric>
+    <metric>standard-deviation [fe2-np / (fe2-np + fe3-np)] of nanoparticle</metric>
+    <metric>(count (fe3reducer with [adhering? = True])) / (count fe3reducer)</metric>
+    <metric>mean [count my-links] of fe3reducer</metric>
+    <metric>standard-deviation [count my-links] of fe3reducer</metric>
+    <enumeratedValueSet variable="adhesion-strategy">
+      <value value="&quot;biofilm&quot;"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="encrustation-strategy">
+      <value value="&quot;shedding&quot;"/>
+    </enumeratedValueSet>
+  </experiment>
+  <experiment name="Comb4" repetitions="20" runMetricsEveryStep="true">
+    <setup>setup</setup>
+    <go>go</go>
+    <metric>(sum([fe2-np] of nanoparticle)) + (sum ([fe2-ads] of (patches with [fe3? = True]))) + fe2</metric>
+    <metric>sum ([fe2-np] of nanoparticle)</metric>
+    <metric>fe2</metric>
+    <metric>sum ([fe2-ads] of (patches with [fe3? = True]))</metric>
+    <metric>sum ([fe3-np] of nanoparticle)</metric>
+    <metric>count nanoparticle</metric>
+    <metric>mean [diameter] of nanoparticle</metric>
+    <metric>standard-deviation [diameter] of nanoparticle</metric>
+    <metric>mean [fe2-np / (fe2-np + fe3-np)] of nanoparticle</metric>
+    <metric>standard-deviation [fe2-np / (fe2-np + fe3-np)] of nanoparticle</metric>
+    <metric>(count (fe3reducer with [adhering? = True])) / (count fe3reducer)</metric>
+    <metric>mean [count my-links] of fe3reducer</metric>
+    <metric>standard-deviation [count my-links] of fe3reducer</metric>
+    <enumeratedValueSet variable="adhesion-strategy">
+      <value value="&quot;biofilm&quot;"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="encrustation-strategy">
+      <value value="&quot;low pH&quot;"/>
+    </enumeratedValueSet>
+  </experiment>
+  <experiment name="ShortPeriod_withoutSMF" repetitions="10" runMetricsEveryStep="true">
+    <setup>setup</setup>
+    <go>go</go>
+    <metric>(sum([fe2-np] of nanoparticle)) + (sum ([fe2-ads] of (patches with [fe3? = True]))) + fe2</metric>
+    <metric>sum ([fe2-np] of nanoparticle)</metric>
+    <metric>fe2</metric>
+    <metric>sum ([fe2-ads] of (patches with [fe3? = True]))</metric>
+    <metric>sum ([fe3-np] of nanoparticle)</metric>
+    <metric>count nanoparticle</metric>
+    <metric>mean [diameter] of nanoparticle</metric>
+    <metric>standard-deviation [diameter] of nanoparticle</metric>
+    <metric>mean [fe2-np / (fe2-np + fe3-np)] of nanoparticle</metric>
+    <metric>standard-deviation [fe2-np / (fe2-np + fe3-np)] of nanoparticle</metric>
+    <metric>(count (fe3reducer with [adhering? = True])) / (count fe3reducer)</metric>
+    <metric>mean [count my-links] of fe3reducer</metric>
+    <metric>standard-deviation [count my-links] of fe3reducer</metric>
+    <enumeratedValueSet variable="encrustation-strategy">
+      <value value="&quot;shedding&quot;"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="np-dissociaton-threshold">
+      <value value="0.7"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="mineral-aggregation-probability">
+      <value value="100"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="initial-number-fe3reducer">
+      <value value="15"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="contact-reduction-rate">
+      <value value="10"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="initial-number-nanoparticle">
+      <value value="0"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="e-shuttle-range">
+      <value value="10"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="adhesion-strategy">
+      <value value="&quot;electrostatic&quot;"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="shedding-diameter">
+      <value value="10"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="initial-number-fe2oxidizer">
+      <value value="15"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="speed-fe2oxidizer">
+      <value value="1"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="max-ticks">
+      <value value="40000"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="fe2-equilibrium-rate">
+      <value value="0.02"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="adhesion-requirement">
+      <value value="0.5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="speed-fe3reducer">
+      <value value="1"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="np-mineral-reduction-ratio">
+      <value value="100"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="fe-patch-percentage">
+      <value value="1"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="iron-per-cubicnm">
+      <value value="0.027"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="start-medium-fe2">
+      <value value="0"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="fe-clustering">
+      <value value="90"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="abiotic-oxidation-ratio">
+      <value value="0.01"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="fe2-ads-tolerance">
+      <value value="1000"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="fe2-%solid-in-equilibrium">
+      <value value="0.9"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="contact-oxidation-rate">
+      <value value="36"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="np-loss-percentage">
+      <value value="0"/>
+    </enumeratedValueSet>
+  </experiment>
+</experiments>
+@#$#@#$#@
+@#$#@#$#@
+default
+0.0
+-0.2 0 0.0 1.0
+0.0 1 1.0 0.0
+0.2 0 0.0 1.0
+link direction
+true
+0
+Line -7500403 true 150 150 90 180
+Line -7500403 true 150 150 210 180
+@#$#@#$#@
+0
+@#$#@#$#@
